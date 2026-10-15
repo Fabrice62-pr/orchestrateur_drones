@@ -1,0 +1,183 @@
+{
+  "rules": [
+	{
+	  "name": "Démarrage : lancer la patrouille",
+	  "on": "simulation_started",
+	  "actions": [
+		{ "type": "patrol", "drone": "surveillance" }
+	  ]
+	},
+	{
+	  "name": "Incendie détecté : déployer les drones d'action",
+	  "on": "fire_detected",
+	  "conditions": [
+		{ "field": "event.intensity", "op": ">=", "value": 1 }
+	  ],
+	  "actions": [
+		{ "type": "log", "message": "Incendie détecté par {drone_id} ({intensity} foyers)", "level": "warn" },
+		{ "type": "log", "message": "Transmission de l'alerte vers les drones d'action...", "level": "info" },
+		{ "type": "log", "message": "Alerte reçue par les drones d'action", "level": "info", "delay": 4 },
+		{ "type": "dispatch", "role": "action", "count": 3, "target": "event.position", "min_battery": 35, "delay": 4 },
+		{ "type": "log", "message": "Alerte transmise à la caserne de pompiers", "level": "info", "delay": 4 },
+		{ "type": "dispatch_firefighters", "count": 2, "target": "event.position", "delay": 4 },
+		{ "type": "log", "message": "{drone_id} : vol stationnaire au-dessus du feu jusqu'à son extinction", "level": "info" },
+		{ "type": "observe", "drone": "event.drone_id", "target": "event.position" }
+	  ]
+	},
+	{
+	  "name": "Réservoir vide : remplir au lac",
+	  "on": "tank_empty",
+	  "actions": [
+		{ "type": "refill", "drone": "event.drone_id" }
+	  ]
+	},
+	{
+	  "name": "Remplissage terminé : retour au feu",
+	  "on": "refill_done",
+	  "conditions": [
+		{ "field": "world.fire_active", "op": "==", "value": true }
+	  ],
+	  "actions": [
+		{ "type": "fight", "drone": "event.drone_id", "target": "world.fire_position" }
+	  ]
+	},
+	{
+	  "name": "Remplissage terminé sans feu : retour base",
+	  "on": "refill_done",
+	  "conditions": [
+		{ "field": "world.fire_active", "op": "==", "value": false }
+	  ],
+	  "actions": [
+		{ "type": "return_base", "drone": "event.drone_id" }
+	  ]
+	},
+	{
+	  "name": "Batterie faible : retour base",
+	  "on": "battery_low",
+	  "actions": [
+		{ "type": "log", "message": "{drone_id} : batterie faible ({battery}%)", "level": "warn" },
+		{ "type": "return_base", "drone": "event.drone_id" }
+	  ]
+	},
+	{
+	  "name": "Drone d'action rechargé pendant un feu : y retourner",
+	  "on": "drone_ready",
+	  "conditions": [
+		{ "field": "event.role", "op": "==", "value": "action" },
+		{ "field": "world.fire_active", "op": "==", "value": true }
+	  ],
+	  "actions": [
+		{ "type": "fight", "drone": "event.drone_id", "target": "world.fire_position" }
+	  ]
+	},
+	{
+	  "name": "Surveillance rechargée : reprendre la ronde",
+	  "on": "drone_ready",
+	  "conditions": [
+		{ "field": "event.role", "op": "==", "value": "surveillance" },
+		{ "field": "world.observing_drones", "op": ">", "value": 0 }
+	  ],
+	  "actions": [
+		{ "type": "patrol", "drone": "event.drone_id" }
+	  ]
+	},
+	{
+	  "name": "Surveillance rechargée : pas de feu en cours, reprendre la ronde",
+	  "on": "drone_ready",
+	  "conditions": [
+		{ "field": "event.role", "op": "==", "value": "surveillance" },
+		{ "field": "world.fire_active", "op": "==", "value": false }
+	  ],
+	  "actions": [
+		{ "type": "patrol", "drone": "event.drone_id" }
+	  ]
+	},
+	{
+	  "name": "Surveillance rechargée : feu sans observateur, retourner au-dessus",
+	  "on": "drone_ready",
+	  "conditions": [
+		{ "field": "event.role", "op": "==", "value": "surveillance" },
+		{ "field": "world.fire_active", "op": "==", "value": true },
+		{ "field": "world.observing_drones", "op": "==", "value": 0 }
+	  ],
+	  "actions": [
+		{ "type": "log", "message": "{drone_id} : retour en observation au-dessus du feu", "level": "info" },
+		{ "type": "observe", "drone": "event.drone_id", "target": "world.fire_position" }
+	  ]
+	},
+	{
+	  "name": "Surveillance : feu perdu de vue, reprendre la recherche",
+	  "on": "fire_lost",
+	  "actions": [
+		{ "type": "log", "message": "{drone_id} : plus de feu dans sa zone, recherche des autres foyers", "level": "warn" },
+		{ "type": "patrol", "drone": "event.drone_id" }
+	  ]
+	},
+	{
+	  "name": "Pompiers : citerne vide, retour caserne pour remplir",
+	  "on": "fire_truck_empty",
+	  "actions": [
+		{ "type": "log", "message": "{unit_id} : citerne vide, retour à la caserne", "level": "warn" },
+		{ "type": "refill_fire_truck", "unit": "event.unit_id" }
+	  ]
+	},
+	{
+	  "name": "Pompiers : citerne pleine pendant un feu, y retourner",
+	  "on": "fire_truck_ready",
+	  "conditions": [
+		{ "field": "world.fire_active", "op": "==", "value": true }
+	  ],
+	  "actions": [
+		{ "type": "dispatch_firefighters", "unit": "event.unit_id", "target": "world.fire_position" }
+	  ]
+	},
+	{
+	  "name": "Pompiers : feu hors de portée des lances, se rapprocher",
+	  "on": "fire_out_of_reach",
+	  "actions": [
+		{ "type": "log", "message": "{unit_id} : feu hors de portée, repositionnement", "level": "info" },
+		{ "type": "dispatch_firefighters", "unit": "event.unit_id", "target": "world.fire_position" }
+	  ]
+	},
+	{
+	  "name": "Feu éteint : retour à la base",
+	  "on": "fire_extinguished",
+	  "actions": [
+		{ "type": "log", "message": "Feu maîtrisé : {burnt_cells} cellules brûlées au total." },
+		{ "type": "return_base", "drone": "role:action" },
+		{ "type": "recall_firefighters", "unit": "all" },
+		{ "type": "emit", "event": "fire_over" }
+	  ]
+	},
+	{
+	  "name": "Feu éteint : la surveillance encore en observation reprend sa ronde",
+	  "on": "fire_over",
+	  "conditions": [
+		{ "field": "world.observing_drones", "op": ">", "value": 0 }
+	  ],
+	  "actions": [
+		{ "type": "patrol", "drone": "state:OBSERVE" }
+	  ]
+	},
+	{
+	  "name": "Incendie étendu : alerte",
+	  "on": "fire_report",
+	  "conditions": [
+		{ "field": "event.intensity", "op": ">", "value": 60 }
+	  ],
+	  "actions": [
+		{ "type": "log", "message": "ALERTE : incendie étendu ({intensity} foyers visibles)", "level": "warn" }
+	  ]
+	},
+	{
+	  "name": "Vent fort : alerte",
+	  "on": "wind_changed",
+	  "conditions": [
+		{ "field": "event.speed", "op": ">=", "value": 8 }
+	  ],
+	  "actions": [
+		{ "type": "log", "message": "Vent fort ({speed} m/s) : propagation accélérée", "level": "warn" }
+	  ]
+	}
+  ]
+}

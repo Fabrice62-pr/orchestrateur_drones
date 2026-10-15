@@ -1,0 +1,50 @@
+{
+  "seed": 1337,
+  "scenario": "res://data/scenarios/feu_de_foret.json",
+  "local_rules": true,
+  "wind": {
+    "speed": 4.0,
+    "direction_deg": 170
+  },
+  "drone": {
+    "max_speed": 28.0,
+    "accel": 14.0,
+    "cruise_altitude": 85.0,
+    "work_altitude": 14.0,
+    "battery_drain": 0.3,
+    "battery_drain_fighting": 0.45,
+    "battery_low": 25.0,
+    "charge_rate": 10.0,
+    "water_capacity": 14,
+    "drop_radius": 9.0,
+    "drop_cooldown": 1.0,
+    "refill_time": 2.5,
+    "startup_time": 3.0,
+    "detect_radius": 70.0,
+    "visual_scale": 1.6,
+    "surveillance_scale": 0.55,
+    "distance_boost_max": 3.0
+  },
+  "fire": {
+    "tick": 0.5,
+    "spread": 0.045,
+    "burn_time": 14.0,
+    "wet_duration": 45.0
+  },
+  "city": {
+    "cars": 45,
+    "pedestrians_per_block": 12
+  },
+  "roads": {
+    "show_forest_tracks": false
+  },
+  "fire_service": {
+    "trucks": 2,
+    "crew_per_truck": 4,
+    "water_capacity": 100
+  },
+  "external_bridge": {
+    "enabled": false,
+    "url": "ws://127.0.0.1:8765"
+  }
+}

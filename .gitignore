@@ -1,0 +1,13 @@
+# Cache d'import Godot : régénéré automatiquement à l'ouverture du projet
+.godot/
+
+# Exports et fichiers temporaires
+/build/
+/export/
+*.tmp
+*.part
+__pycache__/
+
+# Système
+.DS_Store
+Thumbs.db
