@@ -31,11 +31,21 @@ uniform sampler2D macro_noise : filter_linear_mipmap, repeat_enable;
 
 uniform vec4 forest_rect = vec4(48.0, -140.0, 157.0, 300.0);
 uniform vec4 city_rect = vec4(-205.0, -175.0, 215.0, 350.0);
-uniform vec4 base_rect = vec4(9.0, -26.0, 34.0, 52.0);
+uniform vec4 base_rect = vec4(9.0, -37.0, 34.0, 74.0);
 uniform vec4 burn_rect = vec4(48.0, -140.0, 155.0, 300.0);
 uniform vec2 lake_center = vec2(122.0, -168.0);
 uniform float lake_radius = 36.0;
 uniform float water_level = -2.0;
+uniform float map_half = 220.0;
+uniform vec4 basin_rect = vec4(0.0, 0.0, 0.0, 0.0);
+// parc de loisirs en forêt : cercles (centre xz, rayon)
+uniform sampler2D lawn_d : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D lawn_n : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D lawn_a : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform vec4 ranger_rect = vec4(0.0);   // parking de la maison forestière
+uniform vec4 lawn_circles[4];   // 2 parcs x (pique-nique, détente)
+uniform vec4 play_circles[2];
+uniform vec4 pond_circles[2];
 
 varying vec3 wpos;
 varying vec3 wnrm;
@@ -46,6 +56,11 @@ void vertex() {
 	// projection plane en X/Z : repère tangent cohérent avec les UV monde
 	TANGENT = normalize(cross(NORMAL, vec3(0.0, 0.0, 1.0)));
 	BINORMAL = normalize(cross(TANGENT, NORMAL));
+}
+
+float circle_mask(vec2 p, vec4 c, float soft) {
+	if (c.z <= 0.0) return 0.0;
+	return 1.0 - smoothstep(c.z - soft, c.z, distance(p, c.xy));
 }
 
 float rect_mask(vec2 p, vec4 r, float soft) {
@@ -90,7 +105,7 @@ void fragment() {
 	layer(alb, nrm, arm, forest, forest_d, forest_n, forest_a, p / 5.5);
 
 	// au-delà de la carte : massifs forestiers et prairies vus de loin
-	float far = smoothstep(640.0, 760.0, max(abs(p.x), abs(p.y)));
+	float far = smoothstep(map_half + 400.0, map_half + 520.0, max(abs(p.x), abs(p.y)));
 	float woods = far * smoothstep(0.5, 0.56, macro + (macro2 - 0.5) * 0.35);
 	vec3 canopy = vec3(0.045, 0.075, 0.035) * mix(0.7, 1.3, texture(forest_d, p / 40.0).g * 2.0);
 	alb = mix(alb, canopy, woods);
@@ -106,8 +121,24 @@ void fragment() {
 	float shore = (1.0 - smoothstep(lake_radius * 1.55, lake_radius * 1.95, dl)) * (1.0 - smoothstep(water_level + 1.0, water_level + 3.0, wpos.y));
 	layer(alb, nrm, arm, shore, sand_d, sand_n, sand_a, p / 7.0);
 
+	// parc : gazon tondu, sable sous les jeux, berges sableuses de l'étang
+	float edge_n = (macro2 - 0.5) * 6.0;
+	float lawn = 0.0;
+	for (int i = 0; i < 4; i++) {
+		lawn = max(lawn, circle_mask(p + edge_n, lawn_circles[i], 5.0));
+	}
+	layer(alb, nrm, arm, lawn, lawn_d, lawn_n, lawn_a, p / 3.0);
+	alb = mix(alb, alb * vec3(0.55, 0.95, 0.38), lawn);   // gazon arrosé, bien vert
+	float sandy = 0.0;
+	for (int i = 0; i < 2; i++) {
+		sandy = max(sandy, circle_mask(p, play_circles[i], 2.0));
+		sandy = max(sandy, circle_mask(p, vec4(pond_circles[i].xy, pond_circles[i].z + 3.0, 0.0), 2.5));
+	}
+	layer(alb, nrm, arm, sandy, sand_d, sand_n, sand_a, p / 4.5);
+
 	// ville et base : sol bétonné
-	float urban = max(rect_mask(p, city_rect, 8.0), rect_mask(p, base_rect, 3.0));
+	float urban = max(max(rect_mask(p, city_rect, 8.0), rect_mask(p, base_rect, 3.0)), rect_mask(p, basin_rect, 4.0) * 0.85);
+	urban = max(urban, rect_mask(p, ranger_rect, 2.0) * 0.75);
 	layer(alb, nrm, arm, urban, conc_d, conc_n, conc_a, p / 6.0);
 	alb = mix(alb, alb * vec3(0.82, 0.84, 0.86), urban);   // béton urbain gris
 

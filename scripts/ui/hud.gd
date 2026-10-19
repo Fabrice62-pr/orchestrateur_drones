@@ -37,7 +37,7 @@ var wind_dir_value: Label
 var _wind_apply_at := -1   # ms : application différée du vent pendant qu'on fait glisser
 
 # panneau caméra
-const CAM_DRONES := ["ACT-1", "ACT-2", "ACT-3", "FPT-1", "FPT-2"]
+const CAM_DRONES := ["ACT-1", "ACT-2", "ACT-3", "ACT-4", "ACT-5", "ACT-6", "FPT-1", "FPT-2"]
 const TRUCK_STATE_FR := {"CASERNE": "À la caserne", "DEPART": "Équipage vers le camion",
 	"ROUTE": "En route (gyrophares)", "DEPLOIEMENT": "Établissement des lances", "EXTINCTION": "Attaque du feu",
 	"REPLI": "Repli des lances", "RETOUR": "Retour caserne", "REMPLISSAGE": "Remplissage citerne"}
@@ -174,8 +174,10 @@ func _build_camera_panel() -> void:
 	title.add_theme_font_size_override("font_size", 14)
 	vb.add_child(title)
 	# drone suivi
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
+	var row := GridContainer.new()
+	row.columns = 5
+	row.add_theme_constant_override("h_separation", 4)
+	row.add_theme_constant_override("v_separation", 4)
 	vb.add_child(row)
 	var group_d := ButtonGroup.new()
 	group_d.allow_unpress = false
@@ -320,7 +322,7 @@ func _build_help_panel() -> void:
 		+ "ZQSD (AZERTY) / WASD : se déplacer · A/E : descendre/monter\n" \
 		+ "Maj : accélérer · Molette : zoom · Ctrl + molette : vitesse caméra\n" \
 		+ "Clic molette maintenu : faire glisser la vue\n" \
-		+ "1 à 5 : suivre un drone · 0 : caméra libre · V : changer de vue\n" \
+		+ "1 à 9 : suivre un drone · 0 : caméra libre · V : changer de vue\n" \
 		+ "F : départ de feu aléatoire · Maj + clic gauche : allumer un feu\n" \
 		+ "← / → : direction du vent · ↑ / ↓ : force du vent\n" \
 		+ "L : étiquettes · H : pluie on/off · J : neige on/off · Espace : pause · + / - : vitesse simulation\n" \
@@ -487,11 +489,10 @@ func _drones_text() -> String:
 	var s := "[b]FLOTTE DE DRONES[/b]\n"
 	for d in GameState.drones:
 		var col := "#5aa9ff" if d.role == "surveillance" else "#ff7a5c"
-		var role_fr := "surveillance" if d.role == "surveillance" else "action"
-		s += "[color=%s][b]%s[/b][/color] (%s) — %s\n" % [col, d.drone_id, role_fr, STATE_FR.get(d.state, d.state)]
-		s += "  Batterie %s %d%%" % [_bar(d.battery / 100.0), int(d.battery)]
+		s += "[color=%s][b]%s[/b][/color] %s  %s %d%%" % [col, d.drone_id, STATE_FR.get(d.state, d.state),
+			_bar(d.battery / 100.0, 8), int(d.battery)]
 		if d.role == "action":
-			s += "   Eau %s %d/%d" % [_bar(float(d.water) / maxf(1.0, float(d.max_water)), 6), d.water, d.max_water]
+			s += "  eau %d/%d" % [d.water, d.max_water]
 		s += "\n"
 	if not GameState.fire_trucks.is_empty():
 		s += "[b]POMPIERS[/b]\n"

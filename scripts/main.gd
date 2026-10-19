@@ -20,6 +20,8 @@ const HudScript := preload("res://scripts/ui/hud.gd")
 const CameraScript := preload("res://scripts/camera/free_camera.gd")
 const NetworkScript := preload("res://scripts/world/road_network.gd")
 const CityLifeScript := preload("res://scripts/world/city_life.gd")
+const ForestParkScript := preload("res://scripts/world/forest_park.gd")
+const RangerStationScript := preload("res://scripts/world/ranger_station.gd")
 const StationScript := preload("res://scripts/firefighters/fire_station.gd")
 const AtmosphereScript := preload("res://scripts/render/atmosphere.gd")
 const Look := preload("res://scripts/render/look.gd")
@@ -68,6 +70,16 @@ func _ready() -> void:
 	add_child(forest)
 	forest.generate(terrain, s)
 	GameState.fire = forest
+
+	var park := ForestParkScript.new()   # parc de loisirs dans les clairières de la forêt
+	park.name = "ForestPark"
+	add_child(park)
+	park.build(terrain, s)
+
+	var rangers := RangerStationScript.new()   # maison des gardes forestiers (entrée de la forêt)
+	rangers.name = "RangerStation"
+	add_child(rangers)
+	rangers.build(terrain)
 
 	_build_base()
 
@@ -138,13 +150,15 @@ func _build_base() -> void:
 	# aire rectangulaire nord-sud : ne déborde ni sur la forêt (x >= 48) ni sur la ville
 	var pad := MeshInstance3D.new()
 	var cm := BoxMesh.new()
-	cm.size = Vector3(34.0, 0.4, 52.0)
+	cm.size = Vector3(34.0, 0.4, 74.0)
 	cm.material = Look.pbr("concrete", 4.0, Color(0.78, 0.8, 0.84))
 	pad.mesh = cm
 	pad.position = Vector3(bp.x, y + 0.2, bp.y)
 	add_child(pad)
 	# plots : 3 drones d'action (colonne ouest, 18 m d'écart) puis 2 de surveillance (colonne est)
-	var slots := [Vector2(-8, -18), Vector2(-8, 0), Vector2(-8, 18), Vector2(9, -10), Vector2(9, 10)]
+	# 6 plots « action » (colonnes ouest et centre) puis 3 plots « surveillance » (centre et est)
+	var slots := [Vector2(-9, -27), Vector2(-9, -9), Vector2(-9, 9), Vector2(-9, 27), Vector2(4, -18), Vector2(4, 18),
+		Vector2(4, 0), Vector2(12, -27), Vector2(12, 27)]
 	for sl in slots:
 		var hp := Vector3(bp.x + sl.x, y + 0.4, bp.y + sl.y)
 		home_positions.append(hp)
@@ -170,23 +184,24 @@ func _build_base() -> void:
 		hqm.set_shader_parameter(pair[0] + "_n", Look.tex(pair[1], "nor"))
 	hq.material_override = hqm
 	hq.scale = Vector3(12, 6, 8)
-	hq.position = Vector3(bp.x, y + 3.0, bp.y - 34.0)
+	hq.position = Vector3(bp.x, y + 3.0, bp.y - 46.0)
 	add_child(hq)
-	terrain.add_obstacle_box(Vector2(bp.x, bp.y - 34.0), Vector2(12, 8), y + 6.0)
+	terrain.add_obstacle_box(Vector2(bp.x, bp.y - 46.0), Vector2(12, 8), y + 6.0)
 	var label := Label3D.new()
 	label.text = "BASE DRONES"
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.font_size = 64
 	label.outline_size = 12
 	label.pixel_size = 0.03
-	label.position = Vector3(bp.x, y + 11.0, bp.y - 34.0)
+	label.position = Vector3(bp.x, y + 11.0, bp.y - 46.0)
 	add_child(label)
 
 
 func _spawn_drones() -> void:
 	# [identifiant, rôle, plot] — ordre conservé : touches 1..5 et caméra
-	var defs := [["SURV-1", "surveillance", 3], ["SURV-2", "surveillance", 4],
-		["ACT-1", "action", 0], ["ACT-2", "action", 1], ["ACT-3", "action", 2]]
+	var defs := [["SURV-1", "surveillance", 6], ["SURV-2", "surveillance", 7], ["SURV-3", "surveillance", 8],
+		["ACT-1", "action", 0], ["ACT-2", "action", 1], ["ACT-3", "action", 2],
+		["ACT-4", "action", 3], ["ACT-5", "action", 4], ["ACT-6", "action", 5]]
 	var n_surv := 0
 	for df in defs:
 		if df[1] == "surveillance":
@@ -214,7 +229,8 @@ func _patrol_points(index: int, count: int) -> Array:
 	var h := full.size.y / maxi(count, 1)
 	var fr := Rect2(full.position.x, full.position.y + h * index, full.size.x, h)
 	var pts: Array = []
-	var lanes := 3
+	# passes espacées d'environ 1,5 x le rayon de détection : aucune zone non survolée
+	var lanes := maxi(3, ceili(fr.size.x / (float(GameState.cfgv("drone", "detect_radius", 70.0)) * 1.5)))
 	for l in lanes:
 		var x := fr.position.x + fr.size.x * (l + 0.5) / lanes
 		var a := Vector3(x, 0, fr.position.y + 15.0)
@@ -309,7 +325,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not k.pressed or k.echo:
 		return
 	match k.physical_keycode:
-		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
+		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
 			var idx: int = k.physical_keycode - KEY_1
 			if idx < GameState.drones.size():
 				camera.set_follow(GameState.drones[idx])

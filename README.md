@@ -1,6 +1,6 @@
 # Orchestrateur de drones — simulation feu de forêt (Godot 4.7)
 
-Simulation 3D d'une flotte de 5 drones (2 de surveillance, 3 d'action) dans un monde procédural
+Simulation 3D d'une flotte de 9 drones (3 de surveillance, 6 d'action) dans un monde procédural
 (ville + forêt + lac). Les décisions de mission sont prises par des **règles d'automatisation
 modifiables**, en JSON, éditables pendant la simulation.
 
@@ -21,7 +21,7 @@ S'ils manquent : `python tools/download_assets.py`, puis ouvrir le projet dans G
 | ZQSD (AZERTY) / WASD | Se déplacer · A / E : descendre / monter · Maj : accélérer |
 | Molette · Ctrl + molette | Zoom (distance de suivi, champ de vision en FPV) · vitesse de déplacement |
 | Clic molette maintenu | Faire glisser la vue (caméra libre) |
-| 1 à 5 · 0 | Suivre SURV-1 / SURV-2 / ACT-1 / ACT-2 / ACT-3 · caméra libre |
+| 1 à 9 · 0 | Suivre SURV-1..3 puis ACT-1..6 · caméra libre |
 | V | Changer de vue : Orbite → FPV → 2e personne → Suivi intelligent |
 | Panneau CAMÉRA (à droite) | Choix du drone suivi (ACT-1, ACT-2, libre) et du mode de vue |
 | F | Départ de feu aléatoire |
@@ -249,7 +249,7 @@ se suivent aussi à la caméra (panneau CAMÉRA : FPT-1 / FPT-2, vue embarquée 
 
 ## Surveillance à deux drones
 
-La forêt est partagée en deux bandes : **SURV-1** fait sa ronde au nord, **SURV-2** au sud.
+La forêt (~510 × 660 m, sur une carte de 1,2 km) est partagée en trois bandes, une par drone de surveillance.
 Quand l'un détecte un feu, **il quitte sa ronde et se met en vol stationnaire à la verticale du
 foyer** (55 m au-dessus du sol) et l'observe **jusqu'à ce que l'incendie soit éteint**, puis reprend
 sa ronde ; l'autre continue sa ronde pendant ce temps. S'il doit rentrer recharger sa batterie, il
@@ -279,3 +279,9 @@ revient se placer au-dessus du feu une fois rechargé si personne d'autre ne l'o
 Performances mesurées : ~55 images/s en vue d'ensemble (1600×900, RTX 4060 portable).
 Pour une machine plus modeste : désactiver `sdfgi_enabled` / `volumetric_fog_enabled` dans
 `scripts/render/atmosphere.gd`.
+
+## Points d'eau
+
+Les drones d'action se remplissent au **point d'eau le plus proche** : le lac (nord-ouest de la
+forêt) ou le **bassin DFCI** (réserve d'eau en béton de 30 × 30 m, dans une clairière au cœur du
+massif, en (390, 15)), chacun à sa place pour ne pas gêner les autres.

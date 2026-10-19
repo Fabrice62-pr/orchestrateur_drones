@@ -27,7 +27,7 @@
   },
   "fire": {
     "tick": 0.5,
-    "spread": 0.045,
+    "spread": 0.025,
     "burn_time": 14.0,
     "wet_duration": 45.0
   },

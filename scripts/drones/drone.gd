@@ -257,13 +257,27 @@ func _hdist(a: Vector3, b: Vector3) -> float:
 	return Vector2(a.x - b.x, a.z - b.z).length()
 
 
+## Point de remplissage : le point d'eau (lac ou bassin DFCI) le plus proche ;
+## chaque drone d'action a sa place autour, pour ne pas se gêner.
 func _lake_point() -> Vector3:
-	var lc: Vector2 = GameState.terrain.lake_center2
-	var wl: float = GameState.terrain.water_level
-	# chaque drone a son propre point de pompage : ils ne se disputent pas la même place
-	var k := maxi(GameState.drones.find(self), 0)
-	var a := k * 2.4
-	return Vector3(lc.x + cos(a) * 12.0, wl + bottom + 2.5, lc.y + sin(a) * 12.0)
+	var best: Array = []
+	var bd := INF
+	for wp in GameState.terrain.water_points():
+		var c: Vector3 = wp[0]
+		var d := _hdist(global_position, c)
+		if d < bd:
+			bd = d
+			best = wp
+	var center: Vector3 = best[0]
+	var r: float = best[1]
+	var k := 0
+	for o in GameState.drones:
+		if o == self:
+			break
+		if o.role == "action":
+			k += 1
+	var a := k * TAU / 6.0
+	return Vector3(center.x + cos(a) * r, center.y + bottom + 2.5, center.z + sin(a) * r)
 
 
 func _update_battery(delta: float) -> void:

@@ -54,12 +54,16 @@ func build(terrain: Node3D, city: Node3D) -> void:
 	var city_end: int = city_index[Vector2i(city.cols, R)]
 	firebreak_zs = [zc]
 	var z := zc - FIREBREAK_SPACING
-	while z > fr.position.y + 25.0:
-		firebreak_zs.append(z)
+	var lake_c: Vector2 = terrain.lake_center2
+	var lake_keep: float = terrain.lake_radius * 1.8   # pas de piste qui traverse le lac
+	while z > fr.position.y + 12.0:
+		if absf(z - lake_c.y) > lake_keep:
+			firebreak_zs.append(z)
 		z -= FIREBREAK_SPACING
 	z = zc + FIREBREAK_SPACING
-	while z < fr.end.y - 25.0:
-		firebreak_zs.append(z)
+	while z < fr.end.y - 10.0:
+		if absf(z - lake_c.y) > lake_keep:
+			firebreak_zs.append(z)
 		z += FIREBREAK_SPACING
 	firebreak_zs.sort()
 	# --- piste de lisière (nord-sud)

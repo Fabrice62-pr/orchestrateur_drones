@@ -39,8 +39,12 @@ var tick_acc := 0.0
 var rng := RandomNumberGenerator.new()
 var centroid := Vector3.ZERO
 
-var foliage_mm: MultiMesh
 var foliage_xforms: Array = []   # transformations d'origine (un arbre calciné perd son feuillage)
+# la forêt est découpée en secteurs de CHUNK m : chaque secteur est un MultiMesh,
+# que le moteur n'affiche que s'il est dans le champ de la caméra
+const CHUNK := 96.0
+var tree_mm: Array = []          # arbre -> MultiMesh de feuillage de son secteur
+var tree_local: PackedInt32Array = PackedInt32Array()   # arbre -> indice dans ce MultiMesh
 var flames_mm: MultiMesh
 var smoke: CPUParticles3D
 var embers: CPUParticles3D
@@ -85,11 +89,18 @@ func generate(t: Node3D, seed_val: int) -> void:
 			var cz := origin.y + (j + 0.5) * CELL
 			var edge := minf(minf(cx - fr.position.x, fr.end.x - cx), minf(cz - fr.position.y, fr.end.y - cz))
 			# lisière irrégulière : la distance au bord est perturbée par un bruit lent
-			var edge_n := edge + dn.get_noise_2d(cx * 0.35 + 500.0, cz * 0.35) * 30.0
-			var d := (dn.get_noise_2d(cx, cz) * 0.5 + 0.5) * 0.9 + clampf(edge_n / 30.0, -1.0, 1.0) * 0.5 - 0.22
+			var edge_n := edge + dn.get_noise_2d(cx * 0.35 + 500.0, cz * 0.35) * 12.0
+			# forêt dense jusqu'aux limites (lisière courte et irrégulière)
+			var d := (dn.get_noise_2d(cx, cz) * 0.5 + 0.5) * 0.7 + clampf(edge_n / 12.0, -1.0, 1.0) * 0.45 + 0.02
 			if Vector2(cx, cz).distance_to(lake) < lake_r * 1.7:
 				d = 0.0
-			elif network and network.distance_to_tracks(Vector2(cx, cz)) < 5.0:
+			elif terrain.near_basin(cx, cz, 14.0):
+				d = 0.0   # clairière du bassin DFCI
+			elif terrain.near_ranger(cx, cz, 3.0):
+				d = 0.0   # clairière de la maison forestière
+			elif terrain.in_park(cx, cz, 4.0):
+				d = 0.0   # clairières du parc de loisirs
+			elif network and network.distance_to_tracks(Vector2(cx, cz)) < 2.6:
 				d = 0.2   # piste : herbe rase, brûle mal, aucun arbre
 			d = clampf(d, 0.0, 1.0)
 			var gy: float = terrain.height_at(cx, cz)
@@ -136,12 +147,12 @@ func _scatter_meadow_trees(trunks: Array, foliages: Array) -> void:
 	var lake: Vector2 = terrain.lake_center2
 	var lake_r: float = terrain.lake_radius
 	var base: Vector2 = terrain.base_pos2
-	for k in 260:
+	for k in int(260.0 * pow(terrain.SIZE / 440.0, 2.0) * 0.4):
 		var x := rng.randf_range(-half, half)
 		var z := rng.randf_range(-half, half)
 		var p2 := Vector2(x, z)
 		var cm: float = terrain.city_mask(x, z)
-		if cm > 0.0 or fr.has_point(p2) or p2.distance_to(lake) < lake_r * 1.8 or p2.distance_to(base) < 45.0:
+		if cm > 0.0 or fr.has_point(p2) or p2.distance_to(lake) < lake_r * 1.8 or p2.distance_to(base) < 60.0:
 			continue
 		if network and network.distance_to_tracks(p2) < 9.0:
 			continue
@@ -157,8 +168,8 @@ func _build_far_forests() -> void:
 	fn.frequency = 0.0045
 	fn.fractal_octaves = 3
 	var inner: float = terrain.SIZE * 0.5 + 8.0
-	var outer := 700.0
-	var step := 8.5
+	var outer: float = inner + 340.0
+	var step := 9.5
 	var xfs: Array = []
 	var cols: Array = []
 	var x := -outer
@@ -178,19 +189,40 @@ func _build_far_forests() -> void:
 					cols.append(_green())
 			z += step
 		x += step
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.mesh = Vegetation.conifer_mesh()
-	mm.instance_count = xfs.size()
+	_chunked(xfs, cols, Vegetation.conifer_mesh(), Vegetation.foliage_material(), "FarForests", 200.0, true)
+
+
+## Répartit des instances en MultiMesh par secteur (culling par secteur).
+## Renvoie, pour chaque instance, [MultiMesh, indice local].
+func _chunked(xfs: Array, cols: Array, mesh: Mesh, mat: Material, prefix: String, size: float, no_shadow := false) -> Array:
+	var groups := {}
 	for k in xfs.size():
-		mm.set_instance_transform(k, xfs[k])
-		mm.set_instance_color(k, cols[k])
-	var mi := MultiMeshInstance3D.new()
-	mi.name = "FarForests"
-	mi.multimesh = mm
-	mi.material_override = Vegetation.foliage_material()
-	add_child(mi)
+		var o: Vector3 = (xfs[k] as Transform3D).origin
+		var key := Vector2i(floori(o.x / size), floori(o.z / size))
+		if not groups.has(key):
+			groups[key] = []
+		groups[key].append(k)
+	var where: Array = []
+	where.resize(xfs.size())
+	for key in groups:
+		var ids: Array = groups[key]
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = mesh
+		mm.instance_count = ids.size()
+		for i in ids.size():
+			mm.set_instance_transform(i, xfs[ids[i]])
+			mm.set_instance_color(i, cols[ids[i]] if not cols.is_empty() else Color(0.8, 0.72, 0.62))
+			where[ids[i]] = [mm, i]
+		var mi := MultiMeshInstance3D.new()
+		mi.name = "%s_%d_%d" % [prefix, key.x, key.y]
+		mi.multimesh = mm
+		mi.material_override = mat
+		if no_shadow:   # décor lointain : pas d'ombre projetée (gain de performance)
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mi)
+	return where
 
 
 func _vc_material() -> StandardMaterial3D:
@@ -201,35 +233,17 @@ func _vc_material() -> StandardMaterial3D:
 
 
 func _build_visuals(trunk_xf: Array, foliage_xf: Array) -> void:
-	var trunk_mesh := Vegetation.trunk_mesh()
-	var trunk_mm := MultiMesh.new()
-	trunk_mm.transform_format = MultiMesh.TRANSFORM_3D
-	trunk_mm.use_colors = true
-	trunk_mm.mesh = trunk_mesh
-	trunk_mm.instance_count = trunk_xf.size()
-	for k in trunk_xf.size():
-		trunk_mm.set_instance_transform(k, trunk_xf[k])
-		trunk_mm.set_instance_color(k, Color(0.8, 0.72, 0.62))
-	var tmi := MultiMeshInstance3D.new()
-	tmi.name = "Trunks"
-	tmi.multimesh = trunk_mm
-	tmi.material_override = Vegetation.trunk_material()
-	add_child(tmi)
-
+	_chunked(trunk_xf, [], Vegetation.trunk_mesh(), Vegetation.trunk_material(), "Trunks", CHUNK)
 	foliage_xforms = foliage_xf
-	foliage_mm = MultiMesh.new()
-	foliage_mm.transform_format = MultiMesh.TRANSFORM_3D
-	foliage_mm.use_colors = true
-	foliage_mm.mesh = Vegetation.conifer_mesh()
-	foliage_mm.instance_count = foliage_xf.size()
-	for k in foliage_xf.size():
-		foliage_mm.set_instance_transform(k, foliage_xf[k])
-		foliage_mm.set_instance_color(k, tree_colors[k])
-	var fmi := MultiMeshInstance3D.new()
-	fmi.name = "Foliage"
-	fmi.multimesh = foliage_mm
-	fmi.material_override = Vegetation.foliage_material()
-	add_child(fmi)
+	var cols: Array = []
+	for c in tree_colors:
+		cols.append(c)
+	var where := _chunked(foliage_xf, cols, Vegetation.conifer_mesh(), Vegetation.foliage_material(), "Foliage", CHUNK)
+	tree_mm.resize(where.size())
+	tree_local.resize(where.size())
+	for t in where.size():
+		tree_mm[t] = where[t][0]
+		tree_local[t] = where[t][1]
 
 	# Flammes : flamme au sol par cellule en feu + grande flamme de couronne si arbres
 	var noise_tex := NoiseTexture2D.new()
@@ -478,12 +492,13 @@ func _paint(idx: int) -> void:
 			_:
 				if wet_t[idx] > 0.0:
 					c = c.lerp(COL_WET_TINT, 0.4)
-		foliage_mm.set_instance_color(t, c)
+		var mm: MultiMesh = tree_mm[t]
+		mm.set_instance_color(tree_local[t], c)
 		# arbre calciné : il ne reste que des branches noircies, plus maigres
 		var xf: Transform3D = foliage_xforms[t]
 		if state[idx] == BURNT:
 			xf.basis = xf.basis * Basis.from_scale(Vector3(0.42, 0.88, 0.42))
-		foliage_mm.set_instance_transform(t, xf)
+		mm.set_instance_transform(tree_local[t], xf)
 
 
 func _update_fire_visuals() -> void:
