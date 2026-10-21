@@ -29,11 +29,16 @@
     "tick": 0.5,
     "spread": 0.025,
     "burn_time": 14.0,
-    "wet_duration": 45.0
+    "wet_duration": 45.0,
+    "drone_retard_factor": 0.3,
+    "drone_damp_factor": 0.25,
+    "drone_damp_duration": 20.0,
+    "drone_retard_duration": 35.0
   },
   "city": {
-    "cars": 45,
-    "pedestrians_per_block": 12
+    "cars": 400,
+    "pedestrians_per_block": 8,
+    "corner_groups": 0.6
   },
   "roads": {
     "show_forest_tracks": false

@@ -16,7 +16,7 @@ var lake_material: ShaderMaterial   # eau (lac et bassin)
 var noise := FastNoiseLite.new()
 var detail := FastNoiseLite.new()
 
-var city_rect := Rect2(-205.0, -175.0, 215.0, 350.0)
+var city_rect := Rect2(-540.0, -445.0, 550.0, 910.0)   # grande ville (12 x 20 îlots), rue z = 54,5 vers la forêt
 var forest_rect := Rect2(48.0, -330.0, 512.0, 660.0)   # grand massif à l'est de la ville et de la base
 var lake_center2 := Vector2(122.0, -168.0)
 var lake_radius := 36.0

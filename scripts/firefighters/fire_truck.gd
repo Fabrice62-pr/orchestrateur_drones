@@ -10,13 +10,25 @@ const Look := preload("res://scripts/render/look.gd")
 ## États : CASERNE, DEPART (équipage qui monte), ROUTE, DEPLOIEMENT/EXTINCTION
 ##         (équipage à pied, lances en action), REPLI (équipage qui remonte),
 ##         RETOUR, REMPLISSAGE (citerne remplie à la caserne)
+##
+## Sur les lieux, chaque pompier suit une séquence visible :
+##   SORTIE (portières ouvertes, descente un par un) -> conducteur au TABLEAU DE POMPE ;
+##   équipiers : VERS_RACCORD (sortie de pompe) -> TUYAU (déroulé en courant jusqu'au
+##   point d'attaque) -> MISE_EN_EAU (tuyau qui se gonfle, lance pointée) -> ATTAQUE (jet).
+## Au repli, les tuyaux sont enroulés par le dévidoir avant que l'équipage remonte.
 
-const HOSE_LEN := 45.0          # longueur de tuyau déroulable depuis le camion
-const SPRAY_RANGE := 13.0       # portée utile d'une lance
+const HOSE_LEN := 60.0          # longueur de tuyau déroulable depuis le camion (3 x 20 m)
+const SPRAY_RANGE := 22.0       # portée utile d'une lance (jet en cloche)
 const SPRAY_RADIUS := 5.5       # zone éteinte par un jet
 const SPRAY_PERIOD := 1.3       # s entre deux applications d'eau par lance
 const ROAD_SPEED := 14.0
 const TRACK_SPEED := 8.0
+const CHARGE_TIME := 2.5        # s : mise en eau d'un tuyau (pompe -> lance)
+# repères locaux du camion (avant = -Z, côté droit = +X)
+# le conducteur (0) descend côté droit, celui du tableau de pompe
+const EXITS := [Vector3(1.7, 0, -3.1), Vector3(-1.7, 0, -3.1), Vector3(1.7, 0, -1.9), Vector3(-1.7, 0, -1.9)]
+const PUMP_STAND := Vector3(2.1, 0, 3.3)      # conducteur devant le tableau de pompe
+const PUMP_PANEL := Vector3(1.3, 1.6, 3.3)
 
 var drone_id := "FPT"           # identifiant (nom compatible caméra/interface)
 var role := "fire_truck"
@@ -51,7 +63,17 @@ var service: Node3D
 var body: Node3D
 var label: Label3D
 var beacons: Array[MeshInstance3D] = []
-var hoses := {}                 # pompier -> MeshInstance3D (tuyau au sol)
+var crew_phase := {}            # pompier -> SORTIE | POMPE | VERS_RACCORD | TUYAU | MISE_EN_EAU | ATTAQUE
+var charge_t := {}
+var exit_idx := 99
+var exit_t := 0.0
+var doors: Array[Node3D] = []   # portières de cabine (charnière à l'avant)
+var door_open := 0.0
+var doors_target := 0.0
+var reel: MeshInstance3D
+var pump_lights: Array[MeshInstance3D] = []
+var hose_total := 0.0
+var announced := {}             # messages déjà affichés pendant cette intervention
 
 
 func _ready() -> void:
@@ -109,11 +131,39 @@ func cmd_return() -> void:
 
 func _start_boarding(next: String) -> void:
 	after_boarding = next
-	state = "DEPART" if at_station() or state == "DEPART" else "REPLI"
+	var was_on_site := not (at_station() or state == "DEPART")
+	state = "DEPART" if not was_on_site else "REPLI"
 	_clear_targets()
+	crew_phase.clear()
+	exit_idx = 99
+	doors_target = 1.0
+	if was_on_site:
+		_say("%s : fermeture des lances, enroulement des tuyaux" % drone_id)
 	var running := after_boarding == "ROUTE"
 	for k in crew.size():
+		crew[k].release_hose()
 		crew[k].go_to(_door(k), running)
+
+
+func _local(p: Vector3) -> Vector3:
+	return global_transform * p
+
+
+## Côté du camion par lequel l'équipier k descend (-1 gauche, +1 droit).
+func _side(k: int) -> float:
+	return signf((EXITS[k % EXITS.size()] as Vector3).x)
+
+
+## Sortie de pompe (raccord de refoulement) de l'équipier k, du côté où il est descendu.
+func _outlet(k: int) -> Vector3:
+	return _local(Vector3(_side(k) * 1.33, 0.95, 2.5 + (k - 1) * 0.42))
+
+
+func _say(msg: String) -> void:
+	if announced.has(msg):
+		return
+	announced[msg] = true
+	EventBus.log_msg(msg, "info")
 
 
 ## Place de chaque pompier à côté du camion (portes de cabine / caisse).
@@ -162,7 +212,7 @@ func _physics_process(dt: float) -> void:
 				state = "CASERNE"
 				empty_sent = false
 				EventBus.emit_event("fire_truck_ready", info())
-	_update_hoses()
+	_update_hoses(dt)
 	_animate(dt)
 
 
@@ -172,6 +222,8 @@ func _update_boarding() -> void:
 		if f.aboard:
 			continue
 		if f.state == "IDLE" or f.arrived():
+			if f.hose_on:
+				continue   # attend que son tuyau soit enroulé avant de monter
 			if Vector2(f.global_position.x - global_position.x, f.global_position.z - global_position.z).length() < 4.0:
 				f.board()
 			else:
@@ -179,6 +231,7 @@ func _update_boarding() -> void:
 	for f in crew:
 		if not f.aboard:
 			return
+	doors_target = 0.0
 	# tout le monde est à bord : départ
 	if after_boarding == "ROUTE":
 		_set_route(stage_node)
@@ -260,17 +313,58 @@ func _on_arrival() -> void:
 		refill_t = 8.0 if water < max_water else 0.5
 		EventBus.emit_event("fire_truck_returned", info())
 		return
-	# arrivé sur la piste : mise en batterie, l'équipage descend
+	# arrivé sur la piste : mise en batterie, portières ouvertes, l'équipage descend un par un
 	state = "DEPLOIEMENT"
-	for k in crew.size():
-		crew[k].alight(_door(k))
-	retarget_t = 0.0
+	announced.clear()
+	crew_phase.clear()
+	charge_t.clear()
+	targets.clear()
+	exit_idx = 0
+	exit_t = 0.5
+	doors_target = 1.0
+	retarget_t = 1.0
+	_say("%s : sur les lieux, l'équipage descend du camion" % drone_id)
 	EventBus.emit_event("fire_truck_arrived", info())
+
+
+## Descente échelonnée, puis chacun à son poste (pompe ou raccord de tuyau).
+func _deploy_crew(dt: float) -> void:
+	if exit_idx < crew.size():
+		exit_t -= dt
+		if exit_t <= 0.0:
+			var f = crew[exit_idx]
+			var ex := _local(EXITS[exit_idx % EXITS.size()])
+			f.alight(Vector3(ex.x, 0.0, ex.z))
+			if exit_idx == 0:
+				crew_phase[f] = "POMPE"
+				f.go_to(_local(PUMP_STAND), false)
+			else:
+				crew_phase[f] = "VERS_RACCORD"
+				f.go_to(_local(Vector3(_side(exit_idx) * 2.2, 0, 2.3 + (exit_idx - 1) * 0.8)), true)
+			exit_idx += 1
+			exit_t = 0.7
+	for k in crew.size():
+		var f = crew[k]
+		if f.aboard:
+			continue
+		match crew_phase.get(f, ""):
+			"POMPE":
+				if f.state == "IDLE":
+					f.work_pump(_local(PUMP_PANEL))
+					_say("%s : pompe en route, pression établie" % drone_id)
+			"VERS_RACCORD":
+				if f.state == "IDLE" or f.arrived():
+					f.attach_hose(_outlet(k))
+					crew_phase[f] = "TUYAU"
+					_say("%s : établissement des tuyaux vers le feu" % drone_id)
+	if exit_idx >= crew.size() and door_open > 0.99:
+		doors_target = 0.0
 
 
 ## Attaque du feu : les équipiers se placent à distance de sécurité des cellules
 ## en feu à portée de tuyau et les arrosent ; le conducteur reste à la pompe.
 func _fight(dt: float) -> void:
+	_deploy_crew(dt)
 	retarget_t -= dt
 	var fire = GameState.fire
 	if retarget_t <= 0.0:
@@ -289,30 +383,52 @@ func _fight(dt: float) -> void:
 			var back: Vector3 = global_position - f.global_position
 			back.y = 0.0
 			f.go_to(f.global_position + back.normalized() * 6.0, true)
+			crew_phase[f] = "TUYAU"
 			continue
 		if f.state == "MOVING" and not f.arrived():
+			if crew_phase.get(f) in ["MISE_EN_EAU", "ATTAQUE"]:
+				crew_phase[f] = "TUYAU"
 			continue
 		if water <= 0:
 			f.idle()
 			continue
-		if f.state != "SPRAYING":
-			f.spray_at(t)
-			state = "EXTINCTION"
-		spray_cd[f] = spray_cd.get(f, 0.0) - dt
-		if spray_cd[f] <= 0.0:
-			spray_cd[f] = SPRAY_PERIOD
-			fire.apply_water(t, SPRAY_RADIUS)
-			water = maxi(0, water - 1)
+		match crew_phase.get(f, ""):
+			"TUYAU":
+				# en position : lance pointée, il attend l'eau
+				charge_t[f] = CHARGE_TIME if not f.hose_charged else 0.4
+				f.aim_at(t)
+				crew_phase[f] = "MISE_EN_EAU"
+			"MISE_EN_EAU":
+				if crew.is_empty() or crew[0].state != "PUMP":
+					continue   # la pompe n'est pas encore en route
+				if not f.hose_charged:
+					f.hose_charged = true   # l'eau arrive : le tuyau se gonfle
+					_say("%s : mise en eau des lances" % drone_id)
+				charge_t[f] = charge_t.get(f, 0.0) - dt
+				if charge_t[f] <= 0.0:
+					f.spray_at(t)
+					crew_phase[f] = "ATTAQUE"
+					state = "EXTINCTION"
+					_say("%s : attaque du feu, jets d'eau ouverts" % drone_id)
+			"ATTAQUE":
+				if f.state != "SPRAYING" or f.spray_target != t:
+					f.spray_at(t)
+				spray_cd[f] = spray_cd.get(f, 0.0) - dt
+				if spray_cd[f] <= 0.0:
+					spray_cd[f] = SPRAY_PERIOD
+					fire.apply_water(t, SPRAY_RADIUS)
+					water = maxi(0, water - 1)
 	if water <= 0 and not empty_sent:
 		empty_sent = true
 		_clear_targets()
 		EventBus.emit_event("fire_truck_empty", info())
-	if any_target:
-		no_target_t = 0.0
+	var deploying: bool = exit_idx < crew.size() or "VERS_RACCORD" in crew_phase.values()
+	if any_target or deploying:
+		no_target_t = 0.0   # pendant l'établissement des tuyaux on ne juge pas la portée
 	else:
 		no_target_t += dt
 		# à l'arrivée on juge vite ; en cours d'attaque on laisse le temps au feu de revenir
-		var patience := 2.5 if state == "DEPLOIEMENT" else 8.0
+		var patience := 2.5 if state == "DEPLOIEMENT" else 5.0
 		if no_target_t > patience and not out_of_reach_sent and GameState.orchestrator.fire_known and fire.burning_count() > 0:
 			out_of_reach_sent = true
 			EventBus.emit_event("fire_out_of_reach", info())
@@ -323,12 +439,16 @@ func _assign_targets(fire) -> void:
 	var taken: Array = []
 	for k in range(1, crew.size()):
 		var f = crew[k]
+		if not (crew_phase.get(f, "") in ["TUYAU", "MISE_EN_EAU", "ATTAQUE"]):
+			continue   # pas encore raccordé : il ne peut pas attaquer
 		var old = targets.get(f)
 		# on garde sa cible tant qu'elle brûle encore
 		if old != null and not fire.burning_near(old, 2.0).is_empty():
 			taken.append(old)
 			continue
-		var cell = fire.find_target(base, taken, 10.0)
+		# en position : la cible suivante est cherchée autour de lui (moins de déplacements)
+		var origin: Vector3 = f.global_position if crew_phase.get(f) in ["MISE_EN_EAU", "ATTAQUE"] else base
+		var cell = fire.find_target(origin, taken, 10.0)
 		if cell == null or Vector2(cell.x - base.x, cell.z - base.z).length() > HOSE_LEN + SPRAY_RANGE:
 			targets.erase(f)
 			f.idle()
@@ -336,16 +456,26 @@ func _assign_targets(fire) -> void:
 		var c: Vector3 = cell
 		taken.append(c)
 		targets[f] = c
+		# déjà en eau et la nouvelle cible est à portée de lance : il pivote sans se déplacer
+		var dc := Vector2(f.global_position.x - c.x, f.global_position.z - c.z).length()
+		if f.state != "MOVING" and dc <= SPRAY_RANGE and dc >= 4.0 and crew_phase.get(f) in ["MISE_EN_EAU", "ATTAQUE"]:
+			continue
 		# position de tir : à portée de lance, côté camion
 		var away := Vector2(base.x - c.x, base.z - c.z)
-		var stand := Vector2(c.x, c.z) + away.normalized() * minf(SPRAY_RANGE - 2.0, away.length())
+		var stand := Vector2(c.x, c.z) + away.normalized() * minf(SPRAY_RANGE - 6.0, away.length())
 		var from_truck := stand - Vector2(base.x, base.z)
 		if from_truck.length() > HOSE_LEN:
 			stand = Vector2(base.x, base.z) + from_truck.normalized() * HOSE_LEN
+		# jamais au milieu des flammes : on recule le poste de tir vers le camion
+		var tries := 0
+		while tries < 8 and not fire.burning_near(Vector3(stand.x, 0.0, stand.y), 4.5).is_empty():
+			stand += (Vector2(base.x, base.z) - stand).normalized() * 2.0
+			tries += 1
 		f.go_to(Vector3(stand.x, 0.0, stand.y), true)
 	# le conducteur reste au tableau de pompe
-	if not crew.is_empty() and crew[0].state == "IDLE":
-		crew[0].go_to(_door(2), false)
+	if not crew.is_empty() and crew[0].state == "IDLE" and not crew[0].aboard:
+		crew[0].go_to(_local(PUMP_STAND), false)
+		crew_phase[crew[0]] = "POMPE"
 
 
 func _clear_targets() -> void:
@@ -356,27 +486,25 @@ func _clear_targets() -> void:
 
 # ------------------------------------------------------------ visuel
 
-func _update_hoses() -> void:
-	var deployed := state == "DEPLOIEMENT" or state == "EXTINCTION" or state == "REPLI"
+## Tuyaux : posés / enroulés par chaque pompier ; le dévidoir tourne avec la longueur.
+func _update_hoses(dt: float) -> void:
+	var total := 0.0
 	for k in range(1, crew.size()):
-		var f = crew[k]
-		var h: MeshInstance3D = hoses.get(f)
-		if h == null:
-			continue
-		h.visible = deployed and not f.aboard
-		if not h.visible:
-			continue
-		var a := global_position + global_transform.basis * Vector3(0, 0.6, 1.5)
-		var b: Vector3 = f.global_position + Vector3(0, 0.15, 0)
-		var d := b - a
-		if d.length() < 0.2:
-			h.visible = false
-			continue
-		h.global_transform = Transform3D(Basis.looking_at(d.normalized(), Vector3.UP) * Basis.from_scale(Vector3(1, 1, d.length())), a + d * 0.5)
+		crew[k].update_hose(_outlet(k), dt)
+		total += crew[k].hose_drawn
+	if reel:
+		reel.rotate_object_local(Vector3.UP, (total - hose_total) / 0.55)
+	hose_total = total
+	var pumping: bool = not crew.is_empty() and crew[0].state == "PUMP"
+	for k in pump_lights.size():
+		pump_lights[k].visible = pumping and (k == 0 or fmod(blink_t * 1.5 + k * 0.3, 1.0) < 0.7)
 
 
 func _animate(dt: float) -> void:
 	blink_t += dt
+	door_open = move_toward(door_open, doors_target, dt * 1.6)
+	for k in doors.size():
+		doors[k].rotation.y = (-1.0 if k % 2 == 0 else 1.0) * door_open * 1.2
 	var on_mission := state == "ROUTE" or state == "DEPLOIEMENT" or state == "EXTINCTION"
 	for k in beacons.size():
 		beacons[k].visible = on_mission and fmod(blink_t * 2.5 + k * 0.5, 1.0) < 0.5
@@ -442,6 +570,52 @@ func _build_visual() -> void:
 	reel.position = Vector3(0, 1.8, 4.15)
 	reel.rotation_degrees.z = 90.0
 	body.add_child(reel)
+	self.reel = reel   # dévidoir
+	# flasques et spires du dévidoir (pour voir la rotation)
+	for sx in [-0.82, 0.82]:
+		_box(reel, Vector3(1.3, 0.05, 0.12), Vector3(0, sx, 0), Look.metal(Color(0.35, 0.35, 0.36), 0.4))
+	_box(reel, Vector3(0.12, 1.5, 1.14), Vector3(0, 0, 0), Look.plastic(Color(0.86, 0.83, 0.72), 0.75))
+	# tableau de pompe (flanc droit, à l'arrière) : manomètres, vannes, sorties de refoulement
+	var panel_mat := Look.metal(Color(0.62, 0.63, 0.65), 0.35)
+	_box(body, Vector3(0.06, 1.0, 1.6), Vector3(1.29, 1.65, 3.2), panel_mat)
+	for g in 3:
+		var gauge := MeshInstance3D.new()
+		var gm := CylinderMesh.new()
+		gm.top_radius = 0.1
+		gm.bottom_radius = 0.1
+		gm.height = 0.04
+		gauge.mesh = gm
+		gauge.material_override = Look.plastic(Color(0.95, 0.95, 0.92), 0.3)
+		gauge.position = Vector3(1.33, 1.95, 2.75 + g * 0.45)
+		gauge.rotation_degrees.z = 90.0
+		body.add_child(gauge)
+		pump_lights.append(_box(body, Vector3(0.03, 0.07, 0.07), Vector3(1.34, 1.72, 2.75 + g * 0.45), _mat(Color(0.2, 1.0, 0.3), 4.0)))
+	for o in 6:
+		var ox := 1.36 if o < 3 else -1.36   # 3 sorties de chaque côté
+		var oz := 2.5 + (o % 3) * 0.42
+		if o < 3:
+			_box(body, Vector3(0.16, 0.12, 0.12), Vector3(1.36, 1.38, 2.75 + o * 0.45), _mat(Color(0.75, 0.08, 0.05)))   # vannes
+		var outlet := MeshInstance3D.new()
+		var om := CylinderMesh.new()
+		om.top_radius = 0.07
+		om.bottom_radius = 0.07
+		om.height = 0.2
+		outlet.mesh = om
+		outlet.material_override = Look.metal(Color(0.8, 0.7, 0.35), 0.3)   # raccords en laiton
+		outlet.position = Vector3(ox, 0.95, oz)
+		outlet.rotation_degrees.z = 90.0
+		body.add_child(outlet)
+	for pl in pump_lights:
+		pl.visible = false
+	# portières de cabine (charnière à l'avant, s'ouvrent vers l'extérieur)
+	for zc in [-3.65, -2.45]:
+		for sx in [-1.0, 1.0]:
+			var hinge := Node3D.new()
+			hinge.position = Vector3(sx * 1.27, 1.95, zc - 0.5)
+			body.add_child(hinge)
+			_box(hinge, Vector3(0.07, 1.7, 1.0), Vector3(sx * 0.02, 0, 0.5), red)
+			_box(hinge, Vector3(0.08, 0.6, 0.8), Vector3(sx * 0.02, 0.45, 0.5), glass)
+			doors.append(hinge)
 	# roues
 	for z in [-2.9, 1.0, 2.8]:
 		for x in [-1.15, 1.15]:
@@ -470,14 +644,6 @@ func _build_visual() -> void:
 	add_child(label)
 
 
-func add_hose_for(f: Node3D) -> void:
-	var h := MeshInstance3D.new()
-	var b := BoxMesh.new()
-	b.size = Vector3(0.14, 0.14, 1.0)
-	h.mesh = b
-	h.material_override = Look.plastic(Color(0.75, 0.74, 0.7), 0.7)
-	h.top_level = true
-	h.visible = false
-	h.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(h)
-	hoses[f] = h
+## Compatibilité : chaque pompier porte désormais son propre tuyau (firefighter.gd).
+func add_hose_for(_f: Node3D) -> void:
+	pass

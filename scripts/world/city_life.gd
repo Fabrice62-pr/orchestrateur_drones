@@ -5,6 +5,9 @@ extends Node3D
 ## dans un carrefour, et elles se rangent sur le côté au passage des pompiers.
 ## Piétons : font le tour des îlots sur les trottoirs, dans les deux sens,
 ## ralentissent derrière un piéton plus lent et marquent parfois une pause.
+## Aux coins de rue, de petits groupes attendent au bord du trottoir pour traverser.
+## Niveau de détail : seuls les piétons proches de la caméra sont redessinés à chaque
+## image ; les plus lointains sont simulés moins souvent (la foule reste fluide).
 ## Rendu en MultiMesh (quelques appels de dessin pour des centaines d'éléments).
 
 const LANE := 2.3              # décalage de la voie de droite / axe de la rue
@@ -13,6 +16,8 @@ const GAP := 7.5               # distance visée entre deux voitures arrêtées 
 const HARD_GAP := 6.0          # jamais moins : les carrosseries (4,3 m) ne se touchent pas
 const BRAKE := 8.0             # décélération de freinage (m/s²)
 const PEOPLE_SCALE := 1.0      # taille réelle
+const NEAR := 230.0            # au-delà (m), piétons simulés 1 pas sur FAR_STEP et non redessinés
+const FAR_STEP := 4
 const Models := preload("res://scripts/render/models.gd")
 # couleurs réalistes (albédo) : carrosseries courantes, vêtements sobres
 const CAR_COLORS := [Color(0.78, 0.78, 0.78), Color(0.03, 0.03, 0.035), Color(0.5, 0.51, 0.53), Color(0.22, 0.23, 0.24),
@@ -30,12 +35,16 @@ var rng := RandomNumberGenerator.new()
 var cars: Array = []
 var peds: Array = []
 var reserved := {}             # nœud de carrefour -> voiture qui le traverse
+var lanes := {}                # clé de voie (a, b) -> voitures engagées sur cette voie (recalculé à chaque pas)
 var car_mm: MultiMesh
 var ped_body_mm: MultiMesh
 var ped_head_mm: MultiMesh
 var ped_hair_mm: MultiMesh
 var ped_leg_mm: MultiMesh
 var ped_arm_mm: MultiMesh
+var peds_by_block := {}        # îlot -> piétons qui en font le tour (fixe après création)
+var cam_pos := Vector3.ZERO
+var tick := 0
 
 
 class Car:
@@ -72,6 +81,9 @@ class Ped:
 	var hair := Color.WHITE
 	var height := 1.0
 	var block_key := Vector2i.ZERO
+	var idle := false          # attend au coin de la rue (immobile)
+	var drawn := false
+	var lod := 0               # décalage du pas de simulation lointaine
 
 
 func setup(network: Node3D, c: Node3D, seed_val: int) -> void:
@@ -80,6 +92,14 @@ func setup(network: Node3D, c: Node3D, seed_val: int) -> void:
 	rng.seed = seed_val + 555
 	_spawn_cars(int(GameState.cfgv("city", "cars", 45)))
 	_spawn_peds(int(GameState.cfgv("city", "pedestrians_per_block", 5)))
+	_spawn_corner_groups(float(GameState.cfgv("city", "corner_groups", 0.6)))
+	for p in peds:
+		if p.idle:
+			continue
+		p.lod = rng.randi() % FAR_STEP
+		if not peds_by_block.has(p.block_key):
+			peds_by_block[p.block_key] = []
+		peds_by_block[p.block_key].append(p)
 	_build_visuals()
 
 
@@ -210,10 +230,14 @@ func _update_car(c: Car, dt: float) -> void:
 		_face(c, _lane_point(c.a, c.b, c.s, c.lateral))
 
 
+func _lane_key(a: int, b: int) -> int:
+	return a * 65536 + b
+
+
 ## Distance au véhicule qui précède sur la même voie (INF si personne).
 func _gap_ahead(c: Car, ln: float) -> float:
 	var gap := INF
-	for o in cars:
+	for o in lanes.get(_lane_key(c.a, c.b), []):
 		if o == c or o.a != c.a or o.b != c.b:
 			continue
 		if o.crossing:
@@ -230,7 +254,7 @@ func _can_cross(c: Car) -> bool:
 	if _truck_near(_np(c.b), 30.0):
 		return false
 	# la voie suivante doit avoir de la place à son entrée
-	for o in cars:
+	for o in lanes.get(_lane_key(c.b, c.next), []):
 		if o != c and not o.crossing and o.a == c.b and o.b == c.next and o.s < GAP:
 			return false
 	return true
@@ -268,14 +292,51 @@ func _spawn_peds(per_block: int) -> void:
 			p.speed = rng.randf_range(1.0, 1.7)
 			p.cur_speed = p.speed
 			p.phase = rng.randf() * TAU
-			p.clothes = CLOTHES[rng.randi() % CLOTHES.size()] * rng.randf_range(0.85, 1.1)
-			p.clothes.a = 1.0
-			p.skin = SKINS[rng.randi() % SKINS.size()]
-			p.trousers = TROUSERS[rng.randi() % TROUSERS.size()]
-			p.hair = HAIR[rng.randi() % HAIR.size()]
-			p.height = rng.randf_range(0.92, 1.08)   # 1,60 m à 1,90 m
+			_dress(p)
 			p.pos = _rect_point(p.rect, p.u)
 			peds.append(p)
+
+
+func _dress(p: Ped) -> void:
+	p.clothes = CLOTHES[rng.randi() % CLOTHES.size()] * rng.randf_range(0.85, 1.1)
+	p.clothes.a = 1.0
+	p.skin = SKINS[rng.randi() % SKINS.size()]
+	p.trousers = TROUSERS[rng.randi() % TROUSERS.size()]
+	p.hair = HAIR[rng.randi() % HAIR.size()]
+	p.height = rng.randf_range(0.92, 1.08)   # 1,60 m à 1,90 m
+
+
+## Petits groupes (1 à 3 personnes) qui attendent au bord du trottoir, à l'angle des
+## îlots, tournés vers la chaussée : hors des files des marcheurs (retrait >= 0,7 m).
+func _spawn_corner_groups(prob: float) -> void:
+	for key in city.block_kind:
+		if city.block_kind[key] == "station":
+			continue
+		var r: Rect2 = city.block_rect(key)
+		for corner: Vector2 in [Vector2(0, 0), Vector2(1, 0), Vector2(0, 1), Vector2(1, 1)]:
+			if rng.randf() > prob:
+				continue
+			var cpt := r.position + r.size * corner
+			var inward := Vector2(1.0 if corner.x == 0.0 else -1.0, 1.0 if corner.y == 0.0 else -1.0)
+			# côté de l'angle où l'on attend : le long de x (face à la rue est-ouest) ou de z
+			var along_x := rng.randf() < 0.5
+			var n := rng.randi_range(1, 3)
+			for k in n:
+				var p := Ped.new()
+				p.idle = true
+				p.block_key = key
+				p.cur_speed = 0.0
+				var along := 1.4 + k * 0.62 + rng.randf_range(-0.1, 0.1)
+				var curb := 0.32
+				if along_x:
+					p.pos = cpt + Vector2(inward.x * along, inward.y * curb)
+					p.heading = Vector2(0, -inward.y)   # face à la chaussée
+				else:
+					p.pos = cpt + Vector2(inward.x * curb, inward.y * along)
+					p.heading = Vector2(-inward.x, 0)
+				p.heading = p.heading.rotated(rng.randf_range(-0.35, 0.35))
+				_dress(p)
+				peds.append(p)
 
 
 func _perimeter(r: Rect2) -> float:
@@ -329,18 +390,31 @@ func _update_ped(p: Ped, dt: float, same_block: Array) -> void:
 func _physics_process(dt: float) -> void:
 	if dt <= 0.0:
 		return
+	lanes.clear()
+	for c in cars:
+		var k := _lane_key(c.a, c.b)
+		if not lanes.has(k):
+			lanes[k] = []
+		lanes[k].append(c)
 	for c in cars:
 		_update_car(c, dt)
-	var by_block := {}
-	for p in peds:
-		if not by_block.has(p.block_key):
-			by_block[p.block_key] = []
-		by_block[p.block_key].append(p)
-	for p in peds:
-		_update_ped(p, dt, by_block[p.block_key])
+	tick += 1
+	var near2 := NEAR * NEAR
+	for key in peds_by_block:
+		var group: Array = peds_by_block[key]
+		for p in group:
+			var dx: float = p.pos.x - cam_pos.x
+			var dz: float = p.pos.y - cam_pos.z
+			if dx * dx + dz * dz < near2:
+				_update_ped(p, dt, group)
+			elif (tick + p.lod) % FAR_STEP == 0:
+				_update_ped(p, dt * FAR_STEP, group)   # loin de la caméra : pas plus grand, moins souvent
 
 
 func _process(_delta: float) -> void:
+	var cam := get_viewport().get_camera_3d()
+	if cam:
+		cam_pos = cam.global_position
 	_draw_cars()
 	_draw_peds()
 
@@ -361,8 +435,17 @@ func _draw_cars() -> void:
 
 ## Silhouette humaine (1,75 m) : jambes et bras articulés, balancement opposé.
 func _draw_peds() -> void:
+	var near2 := NEAR * NEAR
 	for k in peds.size():
 		var p: Ped = peds[k]
+		if p.drawn:
+			if p.idle:
+				continue   # immobile : déjà en place
+			var dx: float = p.pos.x - cam_pos.x
+			var dz: float = p.pos.y - cam_pos.z
+			if dx * dx + dz * dz > near2:
+				continue   # trop loin pour distinguer le pas : on garde la dernière pose
+		p.drawn = true
 		var sc := PEOPLE_SCALE * p.height
 		var bas := _basis_from(p.heading)
 		var o := Vector3(p.pos.x, city.SIDEWALK_TOP, p.pos.y)

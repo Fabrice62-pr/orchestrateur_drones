@@ -10,6 +10,7 @@ const FOLIAGE_SHADER := preload("res://scripts/render/shaders/foliage.gdshader")
 
 static var _conifer: ArrayMesh
 static var _broadleaf: ArrayMesh
+static var _palm: ArrayMesh
 static var _trunk: Mesh
 static var _foliage_mat: ShaderMaterial
 
@@ -85,6 +86,51 @@ static func broadleaf_mesh() -> ArrayMesh:
 			_v(st, p, v.normalized(), Vector2(atan2(v.z, v.x) * 2.0, v.y * 2.0), shade)
 	_broadleaf = st.commit()
 	return _broadleaf
+
+
+## Couronne de palmier (palmier dattier / washingtonia des boulevards) : palmes
+## arquées qui retombent, normalisée (y de -0.5 à 0.5, rayon 1). Le stipe est un
+## tronc (trunk_mesh) étiré séparément.
+static func palm_crown_mesh() -> ArrayMesh:
+	if _palm:
+		return _palm
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 909
+	var fronds := 11
+	var segs := 6
+	for f in fronds:
+		var a := TAU * f / fronds + rng.randf_range(-0.15, 0.15)
+		var dir := Vector3(cos(a), 0, sin(a))
+		var side := Vector3(-dir.z, 0, dir.x)
+		var lift := rng.randf_range(-0.15, 0.15)
+		var prev_c := Vector3.ZERO
+		var prev_w := 0.0
+		for s in segs + 1:
+			var t := float(s) / segs
+			# palme : monte puis retombe en arc
+			var c := dir * t + Vector3(0, 0.3 + (0.55 + lift) * t - (1.25 + lift) * t * t, 0)
+			var w := 0.2 * sin(PI * minf(t * 1.15, 1.0)) + 0.015
+			if s > 0:
+				var droop := Vector3(0, -0.08, 0)   # folioles inclinées : section en V
+				for sd: float in [-1.0, 1.0]:
+					var a0 := prev_c
+					var b0 := c
+					var a1: Vector3 = prev_c + side * sd * prev_w + droop * prev_w * 4.0
+					var b1: Vector3 = c + side * sd * w + droop * w * 4.0
+					var nrm := Vector3.UP
+					var sh := lerpf(0.55, 1.0, t)
+					_v(st, a0, nrm, Vector2(t - 1.0 / segs, 0.5), sh)
+					_v(st, b0, nrm, Vector2(t, 0.5), sh)
+					_v(st, b1, nrm, Vector2(t, 0.5 + sd * 0.5), sh)
+					_v(st, a0, nrm, Vector2(t - 1.0 / segs, 0.5), sh)
+					_v(st, b1, nrm, Vector2(t, 0.5 + sd * 0.5), sh)
+					_v(st, a1, nrm, Vector2(t - 1.0 / segs, 0.5 + sd * 0.5), sh)
+			prev_c = c
+			prev_w = w
+	_palm = st.commit()
+	return _palm
 
 
 static func _v(st: SurfaceTool, p: Vector3, n: Vector3, uv: Vector2, shade: float) -> void:

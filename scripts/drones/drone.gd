@@ -322,7 +322,8 @@ func _do_fight(delta: float) -> void:
 		for o in GameState.drones:
 			if o != self and o.role == "action" and o.state == "FIGHTING" and o.cell_target != null:
 				avoid.append(o.cell_target)
-		cell_target = GameState.fire.find_target(global_position, avoid)
+		# confinement : les drones ne peuvent pas éteindre, ils ralentissent le front
+		cell_target = GameState.fire.find_contain_target(global_position, avoid)
 	if cell_target == null:
 		goal = fire_target
 		goal.y = _ground(fire_target) + 30.0
@@ -340,7 +341,7 @@ func _drop(ct: Vector3) -> void:
 	if spray:
 		spray.restart()
 		spray.emitting = true
-	GameState.fire.apply_water(ct, drop_radius)
+	GameState.fire.apply_water(ct, drop_radius, false)   # ralentit le feu, ne l'éteint pas
 	cell_target = null
 	retarget_cd = 0.0
 	if water <= 0:

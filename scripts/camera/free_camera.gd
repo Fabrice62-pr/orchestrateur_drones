@@ -23,6 +23,7 @@ var yaw := 0.0
 var pitch := -0.5
 var speed := 60.0
 var follow: Node3D = null
+var last_follow: Node3D = null   # dernier véhicule suivi (repris si on choisit une vue en caméra libre)
 var mode := "orbit"
 var looking := false
 var panning := false
@@ -53,10 +54,23 @@ func set_follow(d: Node3D) -> void:
 	follow = d
 	if d == null:
 		yaw = rotation.y
-		pitch = rotation.x
+		pitch = clampf(rotation.x, -1.5, 1.5)
+		rotation = Vector3(pitch, yaw, 0.0)   # supprime le roulis hérité de la vue embarquée
 		fov = 70.0
 		return
+	last_follow = d
 	_enter_mode()
+
+
+## Annule la vue de suivi : caméra libre, souris rendue à l'utilisateur.
+func release_view() -> void:
+	var was: Node3D = follow
+	set_follow(null)
+	looking = false
+	panning = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if was != null:
+		EventBus.log_msg("Caméra libre : contrôle à la souris (vue %s annulée)" % was.drone_id)
 
 
 func set_mode(m: String) -> void:

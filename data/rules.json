@@ -8,20 +8,20 @@
 	  ]
 	},
 	{
-	  "name": "Incendie détecté : déployer les drones d'action",
+	  "name": "Incendie détecté : la surveillance confirme et alerte la caserne",
 	  "on": "fire_detected",
 	  "conditions": [
 		{ "field": "event.intensity", "op": ">=", "value": 1 }
 	  ],
 	  "actions": [
-		{ "type": "log", "message": "Incendie détecté par {drone_id} ({intensity} foyers)", "level": "warn" },
-		{ "type": "log", "message": "Transmission de l'alerte vers les drones d'action...", "level": "info" },
-		{ "type": "log", "message": "Alerte reçue par les drones d'action", "level": "info", "delay": 4 },
-		{ "type": "dispatch", "role": "action", "count": 3, "target": "event.position", "min_battery": 35, "delay": 4 },
-		{ "type": "log", "message": "Alerte transmise à la caserne de pompiers", "level": "info", "delay": 4 },
-		{ "type": "dispatch_firefighters", "count": 2, "target": "event.position", "delay": 4 },
-		{ "type": "log", "message": "{drone_id} : vol stationnaire au-dessus du feu jusqu'à son extinction", "level": "info" },
-		{ "type": "observe", "drone": "event.drone_id", "target": "event.position" }
+		{ "type": "log", "message": "{drone_id} : départ de feu repéré ({intensity} foyers), vérification en vol stationnaire", "level": "warn" },
+		{ "type": "observe", "drone": "event.drone_id", "target": "event.position" },
+		{ "type": "log", "message": "{drone_id} : INCENDIE AVÉRÉ, alerte transmise à la caserne de pompiers", "level": "warn", "delay": 3 },
+		{ "type": "dispatch_firefighters", "count": 2, "target": "event.position", "delay": 3 },
+		{ "type": "log", "message": "Caserne : départ des fourgons pour éteindre l'incendie", "level": "info", "delay": 4 },
+		{ "type": "log", "message": "Drones d'action engagés pour CONTENIR le feu en attendant les pompiers (ils ne peuvent pas l'éteindre)", "level": "info", "delay": 3 },
+		{ "type": "dispatch", "role": "action", "count": 3, "target": "event.position", "min_battery": 35, "delay": 3 },
+		{ "type": "log", "message": "{drone_id} : reste au-dessus du feu et guide les secours jusqu'à l'extinction", "level": "info", "delay": 3 }
 	  ]
 	},
 	{
@@ -143,7 +143,7 @@
 	  "name": "Feu éteint : retour à la base",
 	  "on": "fire_extinguished",
 	  "actions": [
-		{ "type": "log", "message": "Feu maîtrisé : {burnt_cells} cellules brûlées au total." },
+		{ "type": "log", "message": "Incendie terminé : {burnt_cells} cellules brûlées, {extinguished_cells} éteintes par les pompiers." },
 		{ "type": "return_base", "drone": "role:action" },
 		{ "type": "recall_firefighters", "unit": "all" },
 		{ "type": "emit", "event": "fire_over" }

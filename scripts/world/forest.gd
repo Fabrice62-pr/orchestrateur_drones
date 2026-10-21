@@ -5,8 +5,13 @@ extends Node3D
 ## végétation (combustible) et un état : VIDE, COMBUSTIBLE, EN_FEU, BRÛLÉE.
 ## À chaque tick, une cellule en feu peut enflammer ses 8 voisines avec une
 ## probabilité qui dépend de la densité, du vent, de la pente et de la pluie.
-## Les drones d'action « mouillent » les cellules, ce qui éteint le feu et
-## empêche temporairement la ré-inflammation.
+## Deux types d'arrosage :
+##  - lances des pompiers (extinction) : éteignent les cellules en feu et empêchent
+##    temporairement leur ré-inflammation. Seuls les pompiers éteignent le feu.
+##  - largages des drones d'action (confinement) : ne peuvent PAS éteindre. Sur une
+##    cellule en feu, ils ralentissent sa combustion et sa propagation (« abattue ») ;
+##    sur la végétation, ils la rendent plus difficile à enflammer (« humidifiée »).
+##    Les drones contiennent ainsi le front du feu en attendant les pompiers.
 
 enum { EMPTY, FUEL, BURNING, BURNT }
 const CELL := 5.0
@@ -24,7 +29,9 @@ var gh := 0
 var state := PackedInt32Array()
 var density := PackedFloat32Array()
 var burn_t := PackedFloat32Array()
-var wet_t := PackedFloat32Array()
+var wet_t := PackedFloat32Array()       # arrosée par les pompiers : ininflammable
+var retard_t := PackedFloat32Array()    # humidifiée par un drone : s'enflamme moins facilement
+var damp_t := PackedFloat32Array()      # en feu, abattue par un drone : brûle et se propage moins vite
 var cell_pos := PackedVector3Array()
 var tree_first := PackedInt32Array()
 var tree_count := PackedInt32Array()
@@ -32,8 +39,11 @@ var tree_colors := PackedColorArray()
 
 var burning := {}   # idx -> true
 var wet := {}       # idx -> true
+var retarded := {}  # idx -> true
+var damped := {}    # idx -> true
 var total_burnt := 0
-var total_extinguished := 0
+var total_extinguished := 0   # cellules éteintes par les pompiers
+var total_contained := 0      # largages de drones sur des cellules en feu (ralenties, pas éteintes)
 var was_burning := false
 var tick_acc := 0.0
 var rng := RandomNumberGenerator.new()
@@ -69,6 +79,8 @@ func generate(t: Node3D, seed_val: int) -> void:
 	density.resize(n)
 	burn_t.resize(n)
 	wet_t.resize(n)
+	retard_t.resize(n)
+	damp_t.resize(n)
 	cell_pos.resize(n)
 	tree_first.resize(n)
 	tree_count.resize(n)
@@ -400,10 +412,14 @@ func _tick(dt: float) -> void:
 	if GameState.snowing:
 		rain_f = 0.12   # la neige freine davantage la propagation que la pluie
 	var damp := 2.0 if GameState.snowing else (1.5 if GameState.raining else 1.0)
+	var retard_f := float(GameState.cfgv("fire", "drone_retard_factor", 0.3))
+	var damp_f := float(GameState.cfgv("fire", "drone_damp_factor", 0.25))
 	var to_ignite: Array = []
 	var to_burnout: Array = []
 	for idx in burning.keys():
-		burn_t[idx] -= dt * damp
+		var abated := damp_t[idx] > 0.0
+		# un foyer abattu par les drones couve : il brûle deux fois moins vite (il dure plus longtemps)
+		burn_t[idx] -= dt * damp * (0.5 if abated else 1.0)
 		if burn_t[idx] <= 0.0:
 			to_burnout.append(idx)
 			continue
@@ -426,6 +442,10 @@ func _tick(dt: float) -> void:
 				var sf := clampf(1.0 + dh * 0.08, 0.5, 1.8)
 				var diag := 0.7 if (di != 0 and dj != 0) else 1.0
 				var p := spread * density[nidx] * wf * sf * rain_f * diag
+				if abated:
+					p *= damp_f
+				if retard_t[nidx] > 0.0:
+					p *= retard_f
 				if rng.randf() < p:
 					to_ignite.append(nidx)
 	for idx in to_burnout:
@@ -442,6 +462,17 @@ func _tick(dt: float) -> void:
 			wet_t[idx] = 0.0
 			wet.erase(idx)
 			_paint(idx)
+	for idx in retarded.keys():
+		retard_t[idx] -= dt
+		if retard_t[idx] <= 0.0:
+			retard_t[idx] = 0.0
+			retarded.erase(idx)
+			_paint(idx)
+	for idx in damped.keys():
+		damp_t[idx] -= dt
+		if damp_t[idx] <= 0.0 or state[idx] != BURNING:
+			damp_t[idx] = 0.0
+			damped.erase(idx)
 	_update_fire_visuals()
 	var count := burning.size()
 	if was_burning and count == 0:
@@ -490,7 +521,7 @@ func _paint(idx: int) -> void:
 			BURNT:
 				c = COL_BURNT
 			_:
-				if wet_t[idx] > 0.0:
+				if wet_t[idx] > 0.0 or retard_t[idx] > 0.0:
 					c = c.lerp(COL_WET_TINT, 0.4)
 		var mm: MultiMesh = tree_mm[t]
 		mm.set_instance_color(tree_local[t], c)
@@ -518,12 +549,12 @@ func _update_fire_visuals() -> void:
 		mx.z = maxf(mx.z, p.z)
 		var j := Vector3(rng.randf_range(-1.5, 1.5), 0, rng.randf_range(-1.5, 1.5))
 		# flamme au sol (herbes, broussailles)
-		var s := rng.randf_range(0.8, 1.3)
+		var s := rng.randf_range(0.8, 1.3) * (0.55 if damp_t[idx] > 0.0 else 1.0)
 		flames_mm.set_instance_transform(n, Transform3D(Basis.from_scale(Vector3(4.5 * s, 3.2 * s, 1)), p + j))
 		n += 1
-		# feu de couronne : grandes flammes dans les arbres
+		# feu de couronne : grandes flammes dans les arbres (bien plus basses si abattu)
 		if tree_count[idx] > 0:
-			var h := rng.randf_range(9.0, 16.0)
+			var h := rng.randf_range(9.0, 16.0) * (0.45 if damp_t[idx] > 0.0 else 1.0)
 			flames_mm.set_instance_transform(n, Transform3D(Basis.from_scale(Vector3(h * 0.5, h, 1)), p + j * 0.5 + Vector3(0, 2.0, 0)))
 			n += 1
 	flames_mm.visible_instance_count = n
@@ -596,8 +627,58 @@ func find_target(from: Vector3, avoid: Array, avoid_radius: float = 22.0):
 	return cell_pos[best]
 
 
-## Mouille une zone : éteint les cellules en feu et protège les autres. Retourne le nb de cellules éteintes.
-func apply_water(pos: Vector3, radius: float) -> int:
+## Foyer à traiter par un drone (confinement) : de préférence une cellule du FRONT
+## (voisine de végétation encore intacte), pas encore abattue, côté sous le vent,
+## et à l'écart des cellules déjà visées par les autres drones.
+@warning_ignore("integer_division")
+func find_contain_target(from: Vector3, avoid: Array, avoid_radius: float = 22.0):
+	var best := -1
+	var best_score := INF
+	var wind := GameState.wind_vector()
+	var ws := GameState.wind_speed
+	for idx in burning.keys():
+		var p: Vector3 = cell_pos[idx]
+		var score := Vector2(p.x - from.x, p.z - from.z).length()
+		if damp_t[idx] > 0.0:
+			score += 120.0 + damp_t[idx] * 4.0   # déjà abattu : moins prioritaire
+		var i: int = idx % gw
+		var j: int = idx / gw
+		var front := false
+		var downwind := 0.0
+		for dj in [-1, 0, 1]:
+			for di in [-1, 0, 1]:
+				var ni: int = i + di
+				var nj: int = j + dj
+				if (di == 0 and dj == 0) or ni < 0 or nj < 0 or ni >= gw or nj >= gh:
+					continue
+				var nidx := nj * gw + ni
+				if state[nidx] == FUEL and wet_t[nidx] <= 0.0 and retard_t[nidx] <= 0.0:
+					front = true
+					downwind = maxf(downwind, Vector2(di, dj).normalized().dot(wind))
+		if not front:
+			score += 60.0
+		score -= downwind * ws * 6.0   # le front poussé par le vent d'abord
+		for a in avoid:
+			var av: Vector3 = a
+			if Vector2(p.x - av.x, p.z - av.z).length() < avoid_radius:
+				score += 80.0
+		if score < best_score:
+			best_score = score
+			best = idx
+	if best < 0:
+		return null
+	return cell_pos[best]
+
+
+## Arrose une zone.
+##   extinguish = true  (lances des pompiers) : éteint les cellules en feu et rend la
+##                      végétation ininflammable un moment. Retourne le nb de cellules éteintes.
+##   extinguish = false (largage d'un drone) : n'éteint rien ; abat les foyers (combustion
+##                      et propagation ralenties) et humidifie la végétation. Retourne le nb
+##                      de foyers abattus.
+func apply_water(pos: Vector3, radius: float, extinguish := true) -> int:
+	if not extinguish:
+		return _apply_drone_water(pos, radius)
 	var wet_duration := float(GameState.cfgv("fire", "wet_duration", 45.0))
 	var put_out := 0
 	var i0 := clampi(int(floor((pos.x - radius - origin.x) / CELL)), 0, gw - 1)
@@ -622,6 +703,33 @@ func apply_water(pos: Vector3, radius: float) -> int:
 			_paint(idx)
 	_update_fire_visuals()
 	return put_out
+
+
+func _apply_drone_water(pos: Vector3, radius: float) -> int:
+	var damp_duration := float(GameState.cfgv("fire", "drone_damp_duration", 20.0))
+	var retard_duration := float(GameState.cfgv("fire", "drone_retard_duration", 35.0))
+	var abated := 0
+	var i0 := clampi(int(floor((pos.x - radius - origin.x) / CELL)), 0, gw - 1)
+	var i1 := clampi(int(floor((pos.x + radius - origin.x) / CELL)), 0, gw - 1)
+	var j0 := clampi(int(floor((pos.z - radius - origin.y) / CELL)), 0, gh - 1)
+	var j1 := clampi(int(floor((pos.z + radius - origin.y) / CELL)), 0, gh - 1)
+	for j in range(j0, j1 + 1):
+		for i in range(i0, i1 + 1):
+			var idx := j * gw + i
+			var p := cell_pos[idx]
+			if Vector2(p.x - pos.x, p.z - pos.z).length() > radius:
+				continue
+			if state[idx] == BURNING:
+				damp_t[idx] = damp_duration
+				damped[idx] = true
+				abated += 1
+				total_contained += 1
+			elif state[idx] == FUEL:
+				retard_t[idx] = retard_duration
+				retarded[idx] = true
+				_paint(idx)
+	_update_fire_visuals()
+	return abated
 
 
 ## Allume la cellule combustible la plus proche de pos (rayon 30 m).

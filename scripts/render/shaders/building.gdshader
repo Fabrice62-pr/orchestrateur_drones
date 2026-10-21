@@ -2,6 +2,10 @@
 // étage (rideaux, stores, cadres), vitrines en rez-de-chaussée, soubassement, corniche,
 // toit en gravier avec acrotère. Taille de l'immeuble lue dans la transformation
 // d'instance (boîte unité mise à l'échelle). Couleur d'instance = teinte de l'enduit.
+// L'alpha de la couleur d'instance choisit le type de façade :
+//   1.0        : un des 4 styles au hasard (brique comprise)
+//   0.5 .. 0.95 : enduit uniquement (immeubles blancs / ocre façon Casablanca, Rabat)
+//   < 0.5      : mur-rideau en verre (tours du quartier d'affaires), teinté par la couleur
 shader_type spatial;
 render_mode specular_schlick_ggx;
 
@@ -38,6 +42,8 @@ void vertex() {
 void fragment() {
 	float seed = hash(floor(bcenter.xz));
 	int style = int(floor(seed * 4.0));
+	bool curtain = COLOR.a < 0.5;
+	if (COLOR.a < 0.95) style = int(floor(seed * 3.0));   // pas de brique
 	float base_y = bcenter.y - bsize.y * 0.5;
 	float y = wpos.y - base_y;
 	vec3 tint = COLOR.rgb;
@@ -61,6 +67,23 @@ void fragment() {
 		rough = mix(rough, 0.25, wetness * (1.0 - snow));
 	} else if (wnrm.y < -0.5) {
 		alb = vec3(0.2);
+	} else if (curtain) {
+		// --- mur-rideau : panneaux de verre réfléchissants, montants et lisses métalliques
+		bool along_zc = abs(wnrm.x) > 0.5;
+		float uc = along_zc ? wpos.z : wpos.x;
+		float gu = fract(uc / 1.6);
+		float gv = fract(y / 3.6);
+		float mull = 1.0 - step(0.05, gu) * step(gu, 0.95) * step(0.07, gv) * step(gv, 0.93);
+		float cellc = hash(vec2(floor(uc / 1.6), floor(y / 3.6)) + bcenter.xz);
+		vec3 g = COLOR.rgb * 0.32 * mix(0.82, 1.15, cellc);
+		float spandrel = step(0.8, fract(y / 3.6));   // allège opaque entre deux étages
+		g = mix(g, COLOR.rgb * 0.18, spandrel * 0.7);
+		alb = mix(g, vec3(0.62, 0.64, 0.67), mull);
+		rough = mix(0.05, 0.35, mull);
+		metal = mix(0.85, 0.9, mull);
+		nrm = vec3(0.5, 0.5, 1.0);
+		alb = mix(alb, vec3(0.08), 1.0 - step(0.6, y));   // socle sombre
+		rough = mix(rough, rough * 0.6, wetness);
 	} else {
 		// --- façade : coordonnée horizontale le long de la face
 		bool along_z = abs(wnrm.x) > 0.5;

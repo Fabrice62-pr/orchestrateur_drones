@@ -329,11 +329,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			var idx: int = k.physical_keycode - KEY_1
 			if idx < GameState.drones.size():
 				camera.set_follow(GameState.drones[idx])
-		KEY_0:
-			camera.set_follow(null)
+		KEY_0, KEY_ESCAPE:
+			camera.release_view()
 		KEY_V:
 			if camera.follow == null:
-				camera.set_follow(GameState.get_drone("ACT-1"))
+				var last = camera.last_follow
+				camera.set_follow(last if last != null and is_instance_valid(last) else GameState.get_drone("ACT-1"))
 			camera.cycle_mode()
 		KEY_TAB:
 			hud.toggle_editor()

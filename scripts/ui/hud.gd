@@ -5,7 +5,7 @@ extends CanvasLayer
 const STATE_FR := {
 	"IDLE": "À la base", "CHARGING": "En charge", "PATROL": "Patrouille",
 	"ORBIT": "Surveillance du feu", "OBSERVE": "Observation stationnaire du feu", "TRANSIT": "En route vers le feu",
-	"FIGHTING": "Lutte contre le feu", "GO_REFILL": "Vers le lac",
+	"FIGHTING": "Confinement du feu", "GO_REFILL": "Vers le lac",
 	"REFILLING": "Remplissage", "RETURN_BASE": "Retour base",
 	"HOLD": "Stationnaire", "GOTO": "Déplacement", "STARTING": "Mise en route",
 }
@@ -37,7 +37,8 @@ var wind_dir_value: Label
 var _wind_apply_at := -1   # ms : application différée du vent pendant qu'on fait glisser
 
 # panneau caméra
-const CAM_DRONES := ["ACT-1", "ACT-2", "ACT-3", "ACT-4", "ACT-5", "ACT-6", "FPT-1", "FPT-2"]
+const CAM_DRONES := ["SURV-1", "SURV-2", "SURV-3", "ACT-1", "ACT-2", "ACT-3", "ACT-4", "ACT-5", "ACT-6",
+	"FPT-1", "FPT-2"]
 const TRUCK_STATE_FR := {"CASERNE": "À la caserne", "DEPART": "Équipage vers le camion",
 	"ROUTE": "En route (gyrophares)", "DEPLOIEMENT": "Établissement des lances", "EXTINCTION": "Attaque du feu",
 	"REPLI": "Repli des lances", "RETOUR": "Retour caserne", "REMPLISSAGE": "Remplissage citerne"}
@@ -170,12 +171,12 @@ func _build_camera_panel() -> void:
 	vb.add_theme_constant_override("separation", 6)
 	p.add_child(vb)
 	var title := Label.new()
-	title.text = "CAMÉRA — DRONES D'ACTION / POMPIERS"
+	title.text = "CAMÉRA — DRONES / POMPIERS"
 	title.add_theme_font_size_override("font_size", 14)
 	vb.add_child(title)
 	# drone suivi
 	var row := GridContainer.new()
-	row.columns = 5
+	row.columns = 4
 	row.add_theme_constant_override("h_separation", 4)
 	row.add_theme_constant_override("v_separation", 4)
 	vb.add_child(row)
@@ -200,6 +201,20 @@ func _build_camera_panel() -> void:
 		b.button_group = group_m
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		cam_mode_btns[m[0]] = b
+	# annuler la vue : retour à la caméra libre, pilotée à la souris
+	var cancel := Button.new()
+	cancel.text = "✕  Annuler la vue (reprendre la souris)"
+	cancel.focus_mode = Control.FOCUS_NONE
+	cancel.tooltip_text = "Quitte le suivi du drone et rend la caméra libre (touche 0 ou Échap)"
+	cancel.pressed.connect(_on_cam_cancel)
+	vb.add_child(cancel)
+	_sync_camera_controls()
+
+
+func _on_cam_cancel() -> void:
+	var cam = _camera()
+	if cam:
+		cam.release_view()
 	_sync_camera_controls()
 
 
@@ -214,8 +229,9 @@ func _on_cam_mode(on: bool, m: String) -> void:
 	if not on:
 		return
 	var cam = _camera()
-	if cam.follow == null:   # choisir une vue sans drone suivi : on prend ACT-1
-		cam.set_follow(GameState.get_unit(CAM_DRONES[0]))
+	if cam.follow == null:   # vue choisie en caméra libre : on reprend le dernier véhicule suivi
+		var last = cam.last_follow
+		cam.set_follow(last if last != null and is_instance_valid(last) else GameState.get_unit("ACT-1"))
 	cam.set_mode(m)
 
 
@@ -229,8 +245,8 @@ func _sync_camera_controls() -> void:
 		id = cam.follow.drone_id
 	for k in cam_drone_btns:
 		cam_drone_btns[k].set_pressed_no_signal(k == id)
-	for k in cam_mode_btns:
-		cam_mode_btns[k].set_pressed_no_signal(k == cam.mode)
+	for k in cam_mode_btns:   # caméra libre : aucune vue sélectionnée
+		cam_mode_btns[k].set_pressed_no_signal(id != "" and k == cam.mode)
 
 
 func _toggle(parent: Control, text: String, cb: Callable) -> Button:
@@ -322,7 +338,7 @@ func _build_help_panel() -> void:
 		+ "ZQSD (AZERTY) / WASD : se déplacer · A/E : descendre/monter\n" \
 		+ "Maj : accélérer · Molette : zoom · Ctrl + molette : vitesse caméra\n" \
 		+ "Clic molette maintenu : faire glisser la vue\n" \
-		+ "1 à 9 : suivre un drone · 0 : caméra libre · V : changer de vue\n" \
+		+ "1 à 9 : suivre un drone · 0 / Échap : annuler la vue · V : changer de vue\n" \
 		+ "F : départ de feu aléatoire · Maj + clic gauche : allumer un feu\n" \
 		+ "← / → : direction du vent · ↑ / ↓ : force du vent\n" \
 		+ "L : étiquettes · H : pluie on/off · J : neige on/off · Espace : pause · + / - : vitesse simulation\n" \
@@ -518,7 +534,8 @@ func _info_text() -> String:
 	s += "Pluie : %s\n" % ("[color=#8ecae6]oui (%ds)[/color]" % int(GameState.rain_left) if GameState.raining else "non")
 	s += "Neige : %s\n" % ("[color=#e0f0ff]oui (%ds)[/color]" % int(GameState.snow_left) if GameState.snowing else "non")
 	if fire:
-		s += "Foyers actifs : [color=#ff8c42]%d[/color]   Brûlées : %d   Éteintes : %d\n" % [fire.burning_count(), fire.total_burnt, fire.total_extinguished]
+		s += "Foyers actifs : [color=#ff8c42]%d[/color] (%d ralentis)   Brûlées : %d\n" % [fire.burning_count(), fire.damped.size(), fire.total_burnt]
+		s += "Éteintes (pompiers) : %d   Largages drones : %d\n" % [fire.total_extinguished, fire.total_contained]
 	if orch:
 		s += "Incendie signalé : %s\n" % ("[color=#ff6b6b]OUI[/color]" if orch.fire_known else "non")
 		s += "Règles : %d (%s) · déclenchées : %d\n" % [orch.rules.size(), "actives" if orch.local_rules_enabled else "désactivées", orch.rules_fired]
