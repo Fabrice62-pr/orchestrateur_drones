@@ -168,8 +168,15 @@ func _spawn_cars(count: int) -> void:
 
 
 func _truck_near(p: Vector2, radius: float) -> bool:
-	for t in GameState.fire_trucks:
-		if t.moving and Vector2(t.global_position.x - p.x, t.global_position.z - p.y).length() < radius:
+	for t in GameState.fire_trucks + GameState.patrol_units:
+		if t.moving and t.get("siren") != false and Vector2(t.global_position.x - p.x, t.global_position.z - p.y).length() < radius:
+			return true
+	return false
+
+
+func _log_truck_near(p: Vector2, radius: float) -> bool:
+	for t in GameState.lumber_trucks:
+		if t.on_street and Vector2(t.global_position.x - p.x, t.global_position.z - p.y).length() < radius:
 			return true
 	return false
 
@@ -182,6 +189,8 @@ func _update_car(c: Car, dt: float) -> void:
 	c.lateral = move_toward(c.lateral, want_lat, dt * 1.5)
 	if yielding:
 		target = 0.0   # on se range et on s'arrête : les pompiers passent
+	if not c.crossing and _log_truck_near(c.pos, 12.0):
+		target = 0.0   # un grumier traverse la rue (sortie de la scierie) : on attend
 	if not c.crossing:
 		var ln := _lane_len(c.a, c.b)
 		# véhicule devant sur la même voie : vitesse qui permet de s'arrêter à temps

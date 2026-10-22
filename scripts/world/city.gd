@@ -196,6 +196,7 @@ func _plan_districts() -> void:
 		"hospital": mid + Vector2i(2, -4),
 		"police": mid + Vector2i(1, 2),
 		"mosque": Vector2i(2, rows - 5),
+		"sawmill": Vector2i(cols / 2 - 1, rows - 1),   # scierie + marché du bois, en lisière sud
 	}
 	for k in wanted:
 		var key: Vector2i = wanted[k]
@@ -231,7 +232,7 @@ func _special_block(key: Vector2i) -> void:
 		_bld(Vector2(lot.position.x + 6.0, c.y + 6.5), Vector3(12.0, 14.0, 17.0), Color(0.95, 0.95, 0.93, 0.75))
 	elif landmarks.get("police", Vector2i(-1, -1)) == key:
 		_bld(Vector2(c.x, lot.position.y + 7.5), Vector3(lot.size.x - 2.0, 13.0, 15.0), Color(0.86, 0.9, 0.98, 0.75))
-	# mosquée et caserne : construites par leurs propres scripts
+	# mosquée, caserne et scierie : construites par leurs propres scripts
 
 
 # ------------------------------------------------------------ quartiers

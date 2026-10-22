@@ -1,0 +1,10 @@
+{
+  "name": "Braconnage en forêt protégée",
+  "description": "Deux groupes de braconniers viennent couper des pins dans la forêt protégée ; les drones de surveillance les repèrent et guident les gardes forestiers et la police.",
+  "events": [
+	{ "t": 2,   "type": "log", "message": "Scénario : des braconniers vont entrer dans la forêt protégée d'ici 10 s." },
+	{ "t": 10,  "type": "spawn_poachers", "position": "random" },
+	{ "t": 240, "type": "log", "message": "Scénario : un second groupe de braconniers est signalé à la lisière." },
+	{ "t": 250, "type": "spawn_poachers", "position": "random" }
+  ]
+}

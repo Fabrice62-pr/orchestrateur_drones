@@ -44,6 +44,7 @@ var damped := {}    # idx -> true
 var total_burnt := 0
 var total_extinguished := 0   # cellules éteintes par les pompiers
 var total_contained := 0      # largages de drones sur des cellules en feu (ralenties, pas éteintes)
+var total_poached := 0        # arbres du massif abattus illégalement (braconniers)
 var was_burning := false
 var tick_acc := 0.0
 var rng := RandomNumberGenerator.new()
@@ -55,6 +56,14 @@ var foliage_xforms: Array = []   # transformations d'origine (un arbre calciné 
 const CHUNK := 96.0
 var tree_mm: Array = []          # arbre -> MultiMesh de feuillage de son secteur
 var tree_local: PackedInt32Array = PackedInt32Array()   # arbre -> indice dans ce MultiMesh
+var trunk_xforms: Array = []
+var trunk_mm: Array = []         # arbre -> MultiMesh de troncs de son secteur
+var trunk_local := PackedInt32Array()
+var tree_base := PackedVector3Array()    # pied de chaque arbre
+var tree_growth := PackedFloat32Array()  # 1 = adulte, 0 = abattu (arbres de prairie seulement)
+# les arbres du massif (cellules de l'incendie) sont rangés en premier : la forêt est une
+# zone protégée, seuls les arbres de prairie (indices >= meadow_first) peuvent être abattus
+var meadow_first := 0
 var flames_mm: MultiMesh
 var smoke: CPUParticles3D
 var embers: CPUParticles3D
@@ -132,6 +141,7 @@ func generate(t: Node3D, seed_val: int) -> void:
 				_add_tree(trunk_xf, foliage_xf, Vector3(px, py, pz), rng.randf_range(0.75, 1.35))
 			tree_count[idx] = count
 
+	meadow_first = tree_colors.size()
 	_scatter_meadow_trees(trunk_xf, foliage_xf)
 	_build_visuals(trunk_xf, foliage_xf)
 	_init_burn_map()
@@ -149,6 +159,8 @@ func _add_tree(trunks: Array, foliages: Array, p: Vector3, s: float) -> void:
 	var w := 2.2 * s * rng.randf_range(0.85, 1.12)
 	foliages.append(Transform3D(yaw * Basis.from_scale(Vector3(w, 9.9 * s, w)), p + Vector3(0, 1.6 * s + 4.95 * s, 0)))
 	tree_colors.append(_green())
+	tree_base.append(p)
+	tree_growth.append(1.0)
 	terrain.add_obstacle_disc(Vector2(p.x, p.z), w, p.y + 11.5 * s)   # cime de la couronne
 
 
@@ -245,7 +257,13 @@ func _vc_material() -> StandardMaterial3D:
 
 
 func _build_visuals(trunk_xf: Array, foliage_xf: Array) -> void:
-	_chunked(trunk_xf, [], Vegetation.trunk_mesh(), Vegetation.trunk_material(), "Trunks", CHUNK)
+	var twhere := _chunked(trunk_xf, [], Vegetation.trunk_mesh(), Vegetation.trunk_material(), "Trunks", CHUNK)
+	trunk_xforms = trunk_xf
+	trunk_mm.resize(twhere.size())
+	trunk_local.resize(twhere.size())
+	for t in twhere.size():
+		trunk_mm[t] = twhere[t][0]
+		trunk_local[t] = twhere[t][1]
 	foliage_xforms = foliage_xf
 	var cols: Array = []
 	for c in tree_colors:
@@ -514,6 +532,8 @@ func _paint(idx: int) -> void:
 		burn_dirty = true
 	var first := tree_first[idx]
 	for t in range(first, first + tree_count[idx]):
+		if tree_growth[t] <= 0.0:
+			continue   # arbre abattu (braconnage) : il ne réapparaît pas
 		var c: Color = tree_colors[t]
 		match state[idx]:
 			BURNING:
@@ -765,3 +785,145 @@ func ignite_random() -> bool:
 		return false
 	var idx: int = candidates[rng.randi() % candidates.size()]
 	return ignite_at(cell_pos[idx])
+
+
+# ------------------------------------------------------------ exploitation du bois (bûcherons)
+
+## Indices des arbres de prairie : les seuls que les bûcherons ont le droit d'abattre.
+func meadow_trees() -> Array:
+	return range(meadow_first, tree_base.size())
+
+
+## Vrai pour les arbres du massif forestier (zone protégée) : ils ne sont jamais abattus.
+func is_protected(t: int) -> bool:
+	return t < meadow_first or t >= tree_base.size()
+
+
+func tree_scale(t: int) -> float:
+	return (trunk_xforms[t] as Transform3D).basis.x.length()
+
+
+func crown_width(t: int) -> float:
+	return (foliage_xforms[t] as Transform3D).basis.x.length()
+
+
+## Croissance d'un arbre de prairie : 0 = abattu (invisible), 1 = adulte.
+## Les drones contournent l'arbre à sa taille du moment.
+func set_tree_growth(t: int, g: float) -> void:
+	if is_protected(t):
+		push_warning("Arbre %d du massif forestier : zone protégée, coupe refusée" % t)
+		return
+	_change_growth(t, g)
+
+
+func _change_growth(t: int, g: float) -> void:
+	var old := tree_growth[t]
+	tree_growth[t] = clampf(g, 0.0, 1.0)
+	_apply_growth(t)
+	var c := Vector2(tree_base[t].x, tree_base[t].z)
+	if tree_growth[t] < old:   # arbre retiré : on refait les obstacles de son voisinage
+		terrain.clear_obstacle_disc(c, crown_width(t))
+		_restore_obstacles_near(c, crown_width(t))
+	else:
+		_add_tree_obstacle(t)
+
+
+## Déplace le pied d'un arbre de prairie (jeune plant replanté à côté de la souche).
+func move_tree(t: int, p: Vector3) -> void:
+	if is_protected(t):
+		push_warning("Arbre %d du massif forestier : zone protégée, déplacement refusé" % t)
+		return
+	var d := p - tree_base[t]
+	trunk_xforms[t] = (trunk_xforms[t] as Transform3D).translated(d)
+	foliage_xforms[t] = (foliage_xforms[t] as Transform3D).translated(d)
+	tree_base[t] = p
+	_apply_growth(t)
+
+
+## Transformations de l'arbre réduites autour de son pied selon sa croissance.
+func _apply_growth(t: int) -> void:
+	var k := maxf(tree_growth[t], 0.001)
+	var p := tree_base[t]
+	for part in [[foliage_xforms[t], tree_mm[t], tree_local[t]], [trunk_xforms[t], trunk_mm[t], trunk_local[t]]]:
+		var xf: Transform3D = part[0]
+		(part[1] as MultiMesh).set_instance_transform(part[2],
+			Transform3D(Basis.from_scale(Vector3.ONE * k) * xf.basis, p + (xf.origin - p) * k))
+
+
+func _add_tree_obstacle(t: int) -> void:
+	var g := tree_growth[t]
+	if g <= 0.0:
+		return
+	var p := tree_base[t]
+	terrain.add_obstacle_disc(Vector2(p.x, p.z), crown_width(t) * g, p.y + 11.5 * tree_scale(t) * g)
+
+
+## Ré-enregistre les arbres (prairie et lisière du massif) qui débordent dans un disque vidé.
+func _restore_obstacles_near(c: Vector2, r: float) -> void:
+	var reach := r + 6.0
+	for t in range(meadow_first, tree_base.size()):
+		if Vector2(tree_base[t].x, tree_base[t].z).distance_to(c) < reach:
+			_add_tree_obstacle(t)
+	var i0 := maxi(0, int(floor((c.x - reach - origin.x) / CELL)))
+	var i1 := mini(gw - 1, int(floor((c.x + reach - origin.x) / CELL)))
+	var j0 := maxi(0, int(floor((c.y - reach - origin.y) / CELL)))
+	var j1 := mini(gh - 1, int(floor((c.y + reach - origin.y) / CELL)))
+	for j in range(j0, j1 + 1):
+		for i in range(i0, i1 + 1):
+			var idx := j * gw + i
+			for t in range(tree_first[idx], tree_first[idx] + tree_count[idx]):
+				_add_tree_obstacle(t)
+
+
+# ------------------------------------------------------------ braconnage (coupe illégale)
+
+## Cellule de l'incendie qui contient l'arbre t du massif (-1 pour un arbre de prairie).
+func cell_of(t: int) -> int:
+	if t >= meadow_first:
+		return -1
+	var b := tree_base[t]
+	var i := int(floor((b.x - origin.x) / CELL))
+	var j := int(floor((b.z - origin.y) / CELL))
+	if i < 0 or j < 0 or i >= gw or j >= gh:
+		return -1
+	var idx := j * gw + i
+	return idx if t >= tree_first[idx] and t < tree_first[idx] + tree_count[idx] else -1
+
+
+## Arbres adultes du massif, sur une cellule saine (ni en feu ni brûlée), entre r_min et r_max de p.
+func forest_trees_near(p: Vector2, r_min: float, r_max: float) -> Array:
+	var out: Array = []
+	var i0 := maxi(0, int(floor((p.x - r_max - origin.x) / CELL)))
+	var i1 := mini(gw - 1, int(floor((p.x + r_max - origin.x) / CELL)))
+	var j0 := maxi(0, int(floor((p.y - r_max - origin.y) / CELL)))
+	var j1 := mini(gh - 1, int(floor((p.y + r_max - origin.y) / CELL)))
+	for j in range(j0, j1 + 1):
+		for i in range(i0, i1 + 1):
+			var idx := j * gw + i
+			if state[idx] != FUEL:
+				continue
+			for t in range(tree_first[idx], tree_first[idx] + tree_count[idx]):
+				var d := Vector2(tree_base[t].x, tree_base[t].z).distance_to(p)
+				if tree_growth[t] >= 1.0 and d >= r_min and d <= r_max:
+					out.append(t)
+	return out
+
+
+## Coupe illégale d'un arbre du massif protégé (braconniers uniquement) : l'arbre
+## disparaît et sa cellule perd du combustible (trouée de déforestation).
+func fell_illegally(t: int) -> void:
+	if t >= meadow_first or tree_growth[t] <= 0.0:
+		return
+	_change_growth(t, 0.0)
+	total_poached += 1
+	var idx := cell_of(t)
+	if idx < 0:
+		return
+	var left := 0
+	for k in range(tree_first[idx], tree_first[idx] + tree_count[idx]):
+		if tree_growth[k] > 0.0:
+			left += 1
+	density[idx] *= 0.75 if left > 0 else 0.5
+	if state[idx] == FUEL and density[idx] < 0.18:
+		state[idx] = EMPTY
+	_paint(idx)

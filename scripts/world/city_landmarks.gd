@@ -14,6 +14,7 @@ var city: Node3D
 var terrain: Node3D
 var merlons: Array = []      # créneaux des remparts (MultiMesh)
 var vehicles: Array = []     # [Transform3D, Color] ambulances et voitures de police
+var police_spots: Array = [] # places des voitures de patrouille (véhicules animés, poaching.gd)
 var cream: StandardMaterial3D
 var green_tile: StandardMaterial3D
 var zellige: StandardMaterial3D
@@ -122,6 +123,9 @@ func _police(lot: Rect2) -> void:
 	_box(Vector3(court.size.x, 0.1, court.size.y), Vector3(court.get_center().x, 0.06, court.get_center().y), asphalt)
 	for k in 4:
 		var p := Vector3(court.position.x + 4.5 + k * 3.4, 0.11, court.end.y - 4.0)
+		if k >= 2:   # deux voitures de patrouille qui partent en intervention
+			police_spots.append(p)
+			continue
 		vehicles.append([Transform3D(Basis.IDENTITY, p), Color(0.06, 0.12, 0.34)])
 		_box(Vector3(1.1, 0.14, 0.25), p + Vector3(0, 1.53, 0.2), Look.emissive(Color(0.1, 0.3, 1.0), 1.8))
 		_box(Vector3(1.86, 0.25, 0.05), p + Vector3(0, 0.7, 0), white, Vector3(0, PI * 0.5, 0))

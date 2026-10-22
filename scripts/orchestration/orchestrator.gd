@@ -355,6 +355,21 @@ func execute_action(a: Dictionary, event: Dictionary = {}) -> void:
 		"recall_firefighters", "refill_fire_truck":
 			if GameState.fire_service:
 				GameState.fire_service.recall(str(resolve(a.get("unit", "all"), event)))
+		"spawn_poachers":
+			if GameState.poaching:
+				var p = resolve(a.get("position", "random"), event)
+				GameState.poaching.spawn_group(null if typeof(p) == TYPE_STRING else to_vec3(p, Vector3.ZERO))
+		"track":
+			for d in select_drones(a.get("drone", ""), event):
+				d.cmd_track(int(resolve(a.get("group", "event.group"), event)))
+				_cmd(d, "filature des braconniers")
+		"dispatch_rangers", "dispatch_police":
+			if GameState.poaching:
+				var target := to_vec3(resolve(a.get("target", "event.position"), event), Vector3.ZERO)
+				GameState.poaching.dispatch("garde" if t == "dispatch_rangers" else "police", int(a.get("count", 2)), target)
+		"recall_rangers", "recall_police":
+			if GameState.poaching:
+				GameState.poaching.recall("garde" if t == "recall_rangers" else "police")
 		"emit":
 			var payload = a.get("data", {})
 			EventBus.emit_event(str(a.get("event", "custom")), payload if typeof(payload) == TYPE_DICTIONARY else {})

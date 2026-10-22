@@ -18,6 +18,7 @@ var station_spots: Array = []  # nœuds de stationnement des camions
 var segments: Array = []       # [Vector2 a, Vector2 b, String type] hors ville (route d'accès, pistes)
 var track_x := 0.0
 var firebreak_zs: Array = []
+var exit_nodes: Array = []     # extrémités des pistes au bord de la carte (arrivée / fuite des braconniers)
 
 
 func build(terrain: Node3D, city: Node3D) -> void:
@@ -94,6 +95,7 @@ func build(terrain: Node3D, city: Node3D) -> void:
 	_link(city_end, junction)
 	segments.append([nodes[city_end], nodes[junction], "road"])
 	# --- pistes est-ouest (pare-feu)
+	var ends: Array = []
 	for f in firebreak_zs:
 		var start := _closest_in(col_ids, f)
 		var x := track_x + TRACK_STEP
@@ -104,7 +106,27 @@ func build(terrain: Node3D, city: Node3D) -> void:
 			prev = id
 			x += TRACK_STEP
 		segments.append([nodes[start], nodes[prev], "track"])
+		ends.append(prev)
+	# --- sorties : pare-feu prolongés jusqu'au bord est, piste de lisière jusqu'aux bords nord et sud
+	var edge: float = terrain.SIZE * 0.5 - 4.0
+	for e in ends:
+		_exit_track(e, Vector2(edge, nodes[e].y))
+	_exit_track(col_ids[zs[0]], Vector2(track_x, -edge))
+	_exit_track(col_ids[zs[zs.size() - 1]], Vector2(track_x, edge))
 	_build_visuals(terrain)
+
+
+## Piste du nœud `from` jusqu'au point `to` du bord de la carte (dernier nœud : « exit »).
+func _exit_track(from: int, to: Vector2) -> void:
+	var a: Vector2 = nodes[from]
+	var n := maxi(1, int(a.distance_to(to) / TRACK_STEP))
+	var prev := from
+	for k in range(1, n + 1):
+		var id := _add(a.lerp(to, float(k) / n), "exit" if k == n else "track")
+		_link(prev, id)
+		prev = id
+	exit_nodes.append(prev)
+	segments.append([a, to, "track"])
 
 
 func _add(p: Vector2, kind: String) -> int:

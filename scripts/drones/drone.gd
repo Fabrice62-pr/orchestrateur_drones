@@ -8,7 +8,8 @@ extends Node3D
 ## décident quoi faire de ces événements.
 ##
 ## États : IDLE, CHARGING, STARTING, PATROL, ORBIT, OBSERVE, TRANSIT, FIGHTING, GO_REFILL,
-##         REFILLING, RETURN_BASE, HOLD, GOTO
+##         REFILLING, RETURN_BASE, HOLD, GOTO, TRACK
+## TRACK : filature d'un groupe de braconniers (sa position guide les gardes et la police).
 ## STARTING : mise en route au sol (moteurs) avant tout décollage depuis la base.
 
 var drone_id := "DRONE"
@@ -53,6 +54,7 @@ var report_cd := 0.0
 var label_cd := 0.0
 var low_battery_sent := false
 var pending_state := ""       # état visé à la fin de la mise en route
+var track_group := -1         # groupe de braconniers suivi (état TRACK)
 
 var body: Node3D
 var rotors: Array[Node3D] = []
@@ -171,6 +173,12 @@ func cmd_goto(target: Vector3) -> void:
 	_start("GOTO")
 
 
+## Filature d'un groupe de braconniers : le drone reste au-dessus d'eux.
+func cmd_track(group: int) -> void:
+	track_group = group
+	_start("TRACK")
+
+
 func info() -> Dictionary:
 	return {"drone_id": drone_id, "role": role, "state": state, "battery": int(battery), "water": water}
 
@@ -243,6 +251,14 @@ func _physics_process(delta: float) -> void:
 				hold_pos = goto_target
 				state = "HOLD"
 				EventBus.emit_event("arrived", info())
+		"TRACK":
+			var tp = GameState.poaching.track_point(track_group, global_position) if GameState.poaching else null
+			if tp == null:
+				hold_pos = global_position
+				state = "HOLD"
+			else:
+				goal = Vector3(tp.x, 0.0, tp.z)
+				goal.y = _ground(goal) + 45.0
 	_fly(delta)
 	if role == "surveillance":
 		_detect(delta)
@@ -352,7 +368,7 @@ func _drop(ct: Vector3) -> void:
 
 
 func _detect(delta: float) -> void:
-	if not (state in ["PATROL", "ORBIT", "OBSERVE", "HOLD", "GOTO"]):
+	if not (state in ["PATROL", "ORBIT", "OBSERVE", "HOLD", "GOTO", "TRACK"]):
 		return
 	detect_cd -= delta
 	if detect_cd > 0.0:
@@ -361,6 +377,8 @@ func _detect(delta: float) -> void:
 	# en orbite on observe depuis le centre du cercle : c'est la zone surveillée
 	var focused := state == "ORBIT" or state == "OBSERVE"
 	var eye := orbit_center if focused else global_position
+	if GameState.poaching:   # braconniers dans la zone observée
+		GameState.poaching.drone_scan(self, eye, detect_radius)
 	var seen: Array = GameState.fire.burning_near(eye, detect_radius)
 	if seen.is_empty():
 		# feu perdu de vue (foyer éteint ici mais incendie ailleurs) : on le signale

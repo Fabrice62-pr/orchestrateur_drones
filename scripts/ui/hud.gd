@@ -7,7 +7,7 @@ const STATE_FR := {
 	"ORBIT": "Surveillance du feu", "OBSERVE": "Observation stationnaire du feu", "TRANSIT": "En route vers le feu",
 	"FIGHTING": "Confinement du feu", "GO_REFILL": "Vers le lac",
 	"REFILLING": "Remplissage", "RETURN_BASE": "Retour base",
-	"HOLD": "Stationnaire", "GOTO": "Déplacement", "STARTING": "Mise en route",
+	"HOLD": "Stationnaire", "GOTO": "Déplacement", "STARTING": "Mise en route", "TRACK": "Filature des braconniers",
 }
 const LEVEL_COLORS := {"info": "#e6e6e6", "rule": "#ffd166", "warn": "#ff7b7b", "event": "#8ecae6", "cmd": "#b5e48c"}
 const MAX_LOG := 13
@@ -38,10 +38,20 @@ var _wind_apply_at := -1   # ms : application différée du vent pendant qu'on f
 
 # panneau caméra
 const CAM_DRONES := ["SURV-1", "SURV-2", "SURV-3", "ACT-1", "ACT-2", "ACT-3", "ACT-4", "ACT-5", "ACT-6",
-	"FPT-1", "FPT-2"]
+	"FPT-1", "FPT-2", "BUCH-1", "BUCH-2", "GF-1", "GF-2", "POL-1", "POL-2", "BRAC"]
 const TRUCK_STATE_FR := {"CASERNE": "À la caserne", "DEPART": "Équipage vers le camion",
 	"ROUTE": "En route (gyrophares)", "DEPLOIEMENT": "Établissement des lances", "EXTINCTION": "Attaque du feu",
 	"REPLI": "Repli des lances", "RETOUR": "Retour caserne", "REMPLISSAGE": "Remplissage citerne"}
+const LUMBER_STATE_FR := {"SCIERIE": "À la scierie", "ATTENTE": "En attente (incendie)", "DEPART": "Équipe vers le camion",
+	"ROUTE": "En route vers une coupe", "CHANTIER": "Chantier", "EVACUATION": "Évacuation (incendie)",
+	"RETOUR": "Retour scierie", "DECHARGEMENT": "Déchargement des grumes"}
+const PATROL_STATE_FR := {"POSTE": "Au poste", "ROUTE": "Intervention (gyrophares)", "PIED": "Poursuite à pied",
+	"RETOUR": "Retour au poste"}
+const POACHER_STATE_FR := {"ARRIVEE": "Entrent dans la forêt", "COUPE": "Coupe illégale", "DEPART": "Chargent et repartent",
+	"SORTIE": "Quittent la forêt", "FUITE_EMBARQUEMENT": "Fuite : courent à la camionnette", "FUITE": "Fuite en camionnette",
+	"ABANDONNEE": "Fuite à pied", "PARTIE": "Hors de la carte"}
+const WORK_FR := {"APPROCHE": "mise en place", "SCIAGE": "trait d'abattage", "CHUTE": "chute de l'arbre",
+	"EBRANCHAGE": "ébranchage", "TRONCONNAGE": "tronçonnage et chargement", "REPLANTATION": "replantation"}
 const CAM_MODES := [["fpv", "FPV"], ["second", "2e personne"], ["smart", "Suivi intelligent"], ["orbit", "Orbite"]]
 var cam_drone_btns := {}   # id ("" = caméra libre) -> Button
 var cam_mode_btns := {}    # mode -> Button
@@ -171,7 +181,7 @@ func _build_camera_panel() -> void:
 	vb.add_theme_constant_override("separation", 6)
 	p.add_child(vb)
 	var title := Label.new()
-	title.text = "CAMÉRA — DRONES / POMPIERS"
+	title.text = "CAMÉRA — DRONES / SECOURS / BÛCHERONS / BRACONNIERS"
 	title.add_theme_font_size_override("font_size", 14)
 	vb.add_child(title)
 	# drone suivi
@@ -340,6 +350,7 @@ func _build_help_panel() -> void:
 		+ "Clic molette maintenu : faire glisser la vue\n" \
 		+ "1 à 9 : suivre un drone · 0 / Échap : annuler la vue · V : changer de vue\n" \
 		+ "F : départ de feu aléatoire · Maj + clic gauche : allumer un feu\n" \
+		+ "B : braconniers dans la forêt protégée\n" \
 		+ "← / → : direction du vent · ↑ / ↓ : force du vent\n" \
 		+ "L : étiquettes · H : pluie on/off · J : neige on/off · Espace : pause · + / - : vitesse simulation\n" \
 		+ "Tab : éditeur de règles · N : nouvelle carte (graine aléatoire)"
@@ -470,7 +481,7 @@ func _on_log(text: String, level: String) -> void:
 
 
 func _on_event(event_name: String, data: Dictionary) -> void:
-	if event_name == "scenario_step":
+	if event_name == "scenario_step" or event_name == "poachers_report":   # rapports de filature : trop fréquents pour le journal
 		return
 	var parts: Array[String] = []
 	for k in ["drone_id", "intensity", "speed", "direction_deg", "burnt_cells", "duration"]:
@@ -520,6 +531,24 @@ func _drones_text() -> String:
 			s += "[color=#ff5a4a][b]%s[/b][/color] — %s\n" % [t.drone_id, TRUCK_STATE_FR.get(t.state, t.state)]
 			s += "  Citerne %s %d/%d   Équipage %d (%d à bord)\n" % [_bar(float(t.water) / maxf(1.0, float(t.max_water)), 8),
 				t.water, t.max_water, t.crew.size(), aboard]
+	if not GameState.lumber_trucks.is_empty():
+		s += "[b]BÛCHERONS[/b]\n"
+		for t in GameState.lumber_trucks:
+			var st: String = LUMBER_STATE_FR.get(t.state, t.state)
+			if t.state == "CHANTIER":
+				st += " — " + str(WORK_FR.get(t.work, t.work))
+			s += "[color=#d9a441][b]%s[/b][/color] — %s   grumes %d/%d\n" % [t.drone_id, st, t.load, t.capacity]
+	if not GameState.patrol_units.is_empty():
+		s += "[b]GARDES FORESTIERS / POLICE[/b]\n"
+		for u in GameState.patrol_units:
+			var col := "#7ee07a" if u.service == "garde" else "#7aa8ff"
+			s += "[color=%s][b]%s[/b][/color] — %s%s\n" % [col, u.drone_id, PATROL_STATE_FR.get(u.state, u.state),
+				("   %d interpellé(s) à bord" % u.prisoners.size()) if not u.prisoners.is_empty() else ""]
+	if GameState.poaching:
+		for v in GameState.poaching.active_vans():
+			var n_free: int = v.free_members().size()
+			s += "[color=#ff6b5a][b]%s[/b][/color] — %s   %d libre(s)%s\n" % [v.drone_id, POACHER_STATE_FR.get(v.state, v.state),
+				n_free, "" if v.detected else "  [color=#8a96a3](non repérés)[/color]"]
 	return s
 
 
@@ -536,6 +565,14 @@ func _info_text() -> String:
 	if fire:
 		s += "Foyers actifs : [color=#ff8c42]%d[/color] (%d ralentis)   Brûlées : %d\n" % [fire.burning_count(), fire.damped.size(), fire.total_burnt]
 		s += "Éteintes (pompiers) : %d   Largages drones : %d\n" % [fire.total_extinguished, fire.total_contained]
+	var wood = GameState.lumber
+	if wood:
+		s += "Bois : %d abattus · %d replantés (%d en croissance)\n" % [wood.trees_cut, wood.trees_planted, wood.growing.size()]
+		s += "Scierie : %d grumes · %d planches · %d vendues (%d €)\n" % [wood.log_stock, wood.planks, wood.planks_sold, wood.revenue]
+	var poach = GameState.poaching
+	if poach and fire:
+		s += "Braconnage : %d pins coupés · %d interpellés · %d échappés · %d feu(x) causé(s)\n" % [fire.total_poached,
+			poach.arrested, poach.escaped, poach.fires_caused]
 	if orch:
 		s += "Incendie signalé : %s\n" % ("[color=#ff6b6b]OUI[/color]" if orch.fire_known else "non")
 		s += "Règles : %d (%s) · déclenchées : %d\n" % [orch.rules.size(), "actives" if orch.local_rules_enabled else "désactivées", orch.rules_fired]

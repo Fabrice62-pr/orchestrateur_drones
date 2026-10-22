@@ -48,6 +48,30 @@
     "crew_per_truck": 4,
     "water_capacity": 100
   },
+  "lumber": {
+    "trucks": 2,
+    "logs_per_tree": 4,
+    "trees_per_trip": 2,
+    "regrow_time": 240.0,
+    "fire_flee_radius": 150.0,
+    "max_distance_from_city": 400.0,
+    "saw_time": 8.0,
+    "sell_interval": 14.0,
+    "plank_price": 9
+  },
+  "poaching": {
+    "enabled": true,
+    "interval_min": 300.0,
+    "interval_max": 600.0,
+    "max_groups": 1,
+    "poachers_per_group": 3,
+    "trees_per_visit": 3,
+    "notice_chance": 0.015,
+    "siren_hear_radius": 220.0,
+    "fire_accident_chance": 0.12,
+    "ranger_vehicles": 2,
+    "police_vehicles": 2
+  },
   "external_bridge": {
     "enabled": false,
     "url": "ws://127.0.0.1:8765"

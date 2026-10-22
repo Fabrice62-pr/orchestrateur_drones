@@ -23,6 +23,10 @@ var orchestrator: Node = null
 var drones: Array = []
 var fire_trucks: Array = []
 var fire_service: Node3D = null
+var lumber: Node3D = null         # scierie et bûcherons
+var lumber_trucks: Array = []
+var poaching: Node3D = null       # braconniers, gardes forestiers et police
+var patrol_units: Array = []
 
 
 func _ready() -> void:
@@ -73,6 +77,10 @@ func reset_runtime() -> void:
 	drones = []
 	fire_trucks = []
 	fire_service = null
+	lumber = null
+	lumber_trucks = []
+	poaching = null
+	patrol_units = []
 	terrain = null
 	fire = null
 	orchestrator = null
@@ -132,11 +140,18 @@ func get_drone(id: String):
 	return null
 
 
-## Drone ou camion de pompiers (suivi caméra, interface).
+## Drone ou véhicule terrestre (suivi caméra, interface). « BRAC » : braconniers en cours.
 func get_unit(id: String):
 	var d = get_drone(id)
 	if d == null:
-		for t in fire_trucks:
+		for t in fire_trucks + lumber_trucks + patrol_units:
 			if t.drone_id == id:
 				return t
+		if poaching:
+			var vans: Array = poaching.active_vans()
+			if id == "BRAC" and not vans.is_empty():
+				return vans[vans.size() - 1]
+			for v in vans:
+				if v.drone_id == id:
+					return v
 	return d

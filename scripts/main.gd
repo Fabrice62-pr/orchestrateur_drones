@@ -8,6 +8,8 @@ extends Node3D
 ##   ScenarioDirector         -> automatisations de la carte (chronologie JSON)
 ##   ExternalBridge           -> WebSocket vers un orchestrateur externe (n8n, Python)
 ##   HUD                      -> supervision + éditeur de règles
+##   LumberCamp               -> scierie, grumiers et bûcherons (arbres de prairie uniquement)
+##   Poaching                 -> braconniers en forêt protégée, gardes forestiers et police
 
 const TerrainScript := preload("res://scripts/world/terrain.gd")
 const CityScript := preload("res://scripts/world/city.gd")
@@ -23,6 +25,8 @@ const CityLifeScript := preload("res://scripts/world/city_life.gd")
 const ForestParkScript := preload("res://scripts/world/forest_park.gd")
 const RangerStationScript := preload("res://scripts/world/ranger_station.gd")
 const StationScript := preload("res://scripts/firefighters/fire_station.gd")
+const LumberCampScript := preload("res://scripts/lumber/lumber_camp.gd")
+const PoachingScript := preload("res://scripts/poaching/poaching.gd")
 const AtmosphereScript := preload("res://scripts/render/atmosphere.gd")
 const Look := preload("res://scripts/render/look.gd")
 
@@ -101,6 +105,18 @@ func _ready() -> void:
 	add_child(life)
 	life.setup(network, city, s)
 	station.city_life = life
+
+	var lumber := LumberCampScript.new()   # scierie et bûcherons (arbres de prairie, jamais la forêt)
+	lumber.name = "LumberCamp"
+	add_child(lumber)
+	GameState.lumber = lumber
+	lumber.setup(city, terrain, forest, life)
+
+	var poaching := PoachingScript.new()
+	poaching.name = "Poaching"
+	add_child(poaching)
+	GameState.poaching = poaching
+	poaching.setup(network, city, terrain, forest)
 
 	var director := DirectorScript.new()
 	director.name = "ScenarioDirector"
@@ -357,6 +373,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	match k.keycode:
 		KEY_F:
 			orchestrator.execute_action({"type": "ignite", "position": "random"})
+		KEY_B:
+			orchestrator.execute_action({"type": "spawn_poachers", "position": "random"})
 		KEY_H:
 			GameState.set_rain(not GameState.raining, 40.0)
 		KEY_J:

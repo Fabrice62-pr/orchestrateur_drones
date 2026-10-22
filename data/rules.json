@@ -178,6 +178,43 @@
 	  "actions": [
 		{ "type": "log", "message": "Vent fort ({speed} m/s) : propagation accélérée", "level": "warn" }
 	  ]
+	},
+	{
+	  "name": "Braconniers repérés : filature et alerte gardes forestiers + police",
+	  "on": "poachers_detected",
+	  "actions": [
+		{ "type": "log", "message": "{drone_id} : BRACONNIERS repérés en forêt protégée ({count} individus, {unit_id})", "level": "warn" },
+		{ "type": "track", "drone": "event.drone_id", "group": "event.group" },
+		{ "type": "log", "message": "{drone_id} : alerte transmise aux gardes forestiers et à la police", "level": "warn", "delay": 2 },
+		{ "type": "dispatch_rangers", "count": 2, "target": "event.position", "delay": 2 },
+		{ "type": "dispatch_police", "count": 2, "target": "event.position", "delay": 2 }
+	  ]
+	},
+	{
+	  "name": "Braconniers en fuite : le drone guide les poursuivants",
+	  "on": "poachers_fleeing",
+	  "actions": [
+		{ "type": "log", "message": "{unit_id} : fuite {mode}, le drone transmet leur position aux poursuivants", "level": "info" }
+	  ]
+	},
+	{
+	  "name": "Braconnage terminé : bilan et retour des équipes",
+	  "on": "poaching_over",
+	  "actions": [
+		{ "type": "log", "message": "Braconnage terminé : {arrested} interpellé(s), {escaped} en fuite", "level": "warn" },
+		{ "type": "recall_rangers" },
+		{ "type": "recall_police" }
+	  ]
+	},
+	{
+	  "name": "Braconnage terminé : le drone de filature reprend sa ronde",
+	  "on": "poaching_over",
+	  "conditions": [
+		{ "field": "event.tracking", "op": "==", "value": true }
+	  ],
+	  "actions": [
+		{ "type": "patrol", "drone": "event.drone_id" }
+	  ]
 	}
   ]
 }

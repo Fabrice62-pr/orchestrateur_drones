@@ -5,6 +5,7 @@
 	{ "t": 2,   "type": "log", "message": "Scénario : un départ de feu est prévu dans la forêt d'ici 25 s." },
 	{ "t": 25,  "type": "ignite", "position": "random" },
 	{ "t": 100, "type": "set_wind", "speed": 9, "direction_deg": 180 },
+	{ "t": 60,  "type": "spawn_poachers", "position": "random" },
 	{ "t": 170, "type": "ignite", "position": "random" },
 	{ "t": 260, "type": "rain", "duration": 40 },
 	{ "t": 320, "type": "set_wind", "speed": 3, "direction_deg": 90 }

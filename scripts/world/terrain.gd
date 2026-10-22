@@ -103,18 +103,21 @@ func _init_obstacles() -> void:
 	var half := SIZE * 0.5
 	for j in obs_n:
 		for i in obs_n:
-			var x := -half + (i + 0.5) * OBS_STEP
-			var z := -half + (j + 0.5) * OBS_STEP
-			var h := height_at(x, z)
-			# relief : on prend le point le plus haut de la cellule
-			for o in [Vector2(-1.25, -1.25), Vector2(1.25, 1.25)]:
-				h = maxf(h, height_at(x + o.x, z + o.y))
-			if Vector2(x, z).distance_to(lake_center2) < lake_radius * 1.45:
-				h = maxf(h, water_level)
-			for w in pond_water.size():
-				if Vector2(x, z).distance_to(pond_center(w)) < pond_radius:
-					h = maxf(h, pond_water[w])
-			obs_top[j * obs_n + i] = h
+			obs_top[j * obs_n + i] = _ground_top(-half + (i + 0.5) * OBS_STEP, -half + (j + 0.5) * OBS_STEP)
+
+
+## Sommet « nu » d'une cellule d'obstacles : relief et plans d'eau, sans décor.
+func _ground_top(x: float, z: float) -> float:
+	var h := height_at(x, z)
+	# relief : on prend le point le plus haut de la cellule
+	for o in [Vector2(-1.25, -1.25), Vector2(1.25, 1.25)]:
+		h = maxf(h, height_at(x + o.x, z + o.y))
+	if Vector2(x, z).distance_to(lake_center2) < lake_radius * 1.45:
+		h = maxf(h, water_level)
+	for w in pond_water.size():
+		if Vector2(x, z).distance_to(pond_center(w)) < pond_radius:
+			h = maxf(h, pond_water[w])
+	return h
 
 
 func _obs_index(x: float, z: float) -> int:
@@ -149,6 +152,23 @@ func add_obstacle_disc(center: Vector2, radius: float, top: float) -> void:
 				var k := _obs_index(x, z)
 				if k >= 0:
 					obs_top[k] = maxf(obs_top[k], top)
+			z += OBS_STEP * 0.5
+		x += OBS_STEP * 0.5
+
+
+## Retire les obstacles d'un disque (arbre abattu) : les cellules reviennent au relief nu.
+## Les obstacles voisins qui débordaient dans le disque doivent être ré-ajoutés par l'appelant.
+@warning_ignore("integer_division")
+func clear_obstacle_disc(center: Vector2, radius: float) -> void:
+	var half := SIZE * 0.5
+	var x := center.x - radius
+	while x <= center.x + radius + 0.01:
+		var z := center.y - radius
+		while z <= center.y + radius + 0.01:
+			if Vector2(x, z).distance_to(center) <= radius + OBS_STEP * 0.5:
+				var k := _obs_index(x, z)
+				if k >= 0:
+					obs_top[k] = _ground_top(-half + (k % obs_n + 0.5) * OBS_STEP, -half + (k / obs_n + 0.5) * OBS_STEP)
 			z += OBS_STEP * 0.5
 		x += OBS_STEP * 0.5
 

@@ -5,9 +5,9 @@ extends Node3D
 ## d'accueil et tas de bois. Façade tournée vers la piste (+z).
 
 const Look := preload("res://scripts/render/look.gd")
-const Models := preload("res://scripts/render/models.gd")
 
 var terrain: Node3D
+var parking: Array = []      # places des 4x4 des gardes (véhicules animés, poaching.gd)
 
 
 func build(t: Node3D) -> void:
@@ -65,20 +65,9 @@ func build(t: Node3D) -> void:
 		_box(g, Vector3(5.2, 0.04, 0.04), Vector3(0, 0.3 + k * 0.45, 4.08), Look.plastic(Color(0.3, 0.3, 0.3)))
 	terrain.add_obstacle_box(Vector2(c.x + 10.5, c.y - 7.5), Vector2(7.6, 8.6), y + 4.0)
 
-	# --- véhicules des gardes (4x4 vert) garés face au bâtiment
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.mesh = Models.car_mesh()
-	mm.instance_count = 2
+	# --- places des 4x4 des gardes, face au bâtiment (les véhicules sont créés par poaching.gd)
 	for k in 2:
-		var p := Vector3(c.x + 4.0 + k * 3.4, y, c.y + 5.0)
-		mm.set_instance_transform(k, Transform3D(Basis.from_scale(Vector3(1.08, 1.18, 1.0)), p))
-		mm.set_instance_color(k, Color(0.12, 0.3, 0.14))
-	var cars := MultiMeshInstance3D.new()
-	cars.name = "RangerVehicles"
-	cars.multimesh = mm
-	add_child(cars)
+		parking.append(Vector3(c.x + 4.0 + k * 3.4, y, c.y + 5.0))
 	for k in 4:   # marquage des places
 		_box(self, Vector3(0.12, 0.02, 5.0), Vector3(c.x + 2.3 + k * 3.4, y + 0.03, c.y + 5.0), Look.plastic(Color(0.9, 0.9, 0.85)))
 
